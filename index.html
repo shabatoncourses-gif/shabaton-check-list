@@ -1,301 +1,594 @@
-import React, { useState, useEffect } from 'react';
-import { 
-  Plus, Trash2, CheckCircle2, Circle, ListTodo, 
-  Settings2, X, ExternalLink, Save, Loader2, 
-  Users, ChevronRight, BarChart3, Clock
-} from 'lucide-react';
-import { initializeApp } from 'firebase/app';
-import { getAuth, onAuthStateChanged, signInAnonymously, signInWithCustomToken } from 'firebase/auth';
-import { getFirestore, collection, doc, setDoc, onSnapshot, getDocs } from 'firebase/firestore';
-
-// Firebase Config
-const firebaseConfig = JSON.parse(__firebase_config);
-const app = initializeApp(firebaseConfig);
-const auth = getAuth(app);
-const db = getFirestore(app);
-const appId = typeof __app_id !== 'undefined' ? __app_id : 'shabaton-manager-v1';
-
-const DEFAULT_PHASES = [
-  { 
-    name: "שלב א': ההכנות (ינואר-אוגוסט)", 
-    tasks: [
-      { id: 'a1', text: "בדיקת זכאות והפקת אישור", link: "https://www.shabaton.online/luz_shabaton#1080507921" },
-      { id: 'a2', text: "בקשת חל\"ת מהמעסיק (עד 31.3)", link: "https://www.shabaton.online/luz_shabaton#request" },
-      { id: 'a3', text: "חתימה על טופס 1", link: "https://www.shabaton.online/document-submission" },
-      { id: 'a4', text: "הגשת תוכנית לימודים - טופס 2", link: "https://www.shabaton.online/study-plan-submission" }
-    ]
-  },
-  { 
-    name: "שלב ב': במהלך השבתון", 
-    tasks: [
-      { id: 'b1', text: "החזר שכר לימוד ודיווח עבודה", link: "https://www.shabaton.online/tuition-refund" },
-      { id: 'b2', text: "הסדרת ביטוח לאומי ומס בריאות", link: "https://www.shabaton.online/national-insurance" }
-    ]
-  }
-];
-
-export default function App() {
-  const [user, setUser] = useState(null);
-  const [view, setView] = useState('user'); // 'user' or 'admin'
-  const [phases, setPhases] = useState(DEFAULT_PHASES);
-  const [taskStates, setTaskStates] = useState({});
-  const [allUsersData, setAllUsersData] = useState([]);
-  const [isEditMode, setIsEditMode] = useState(false);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
-  const [newTaskText, setNewTaskText] = useState("");
-  const [activePhaseIndex, setActivePhaseIndex] = useState(null);
-
-  useEffect(() => {
-    const initAuth = async () => {
-      try {
-        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-          await signInWithCustomToken(auth, __initial_auth_token);
-        } else {
-          await signInAnonymously(auth);
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>רשימת משימות לשנת שבתון</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
         }
-      } catch (err) {
-        setError("שגיאה בחיבור");
-      }
-    };
-    initAuth();
-    const unsubscribe = onAuthStateChanged(auth, setUser);
-    return () => unsubscribe();
-  }, []);
 
-  // User Data Sync
-  useEffect(() => {
-    if (!user || view !== 'user') return;
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
 
-    const dataDocRef = doc(db, 'artifacts', appId, 'public', 'data', 'checklistData', user.uid);
-    const unsubscribe = onSnapshot(dataDocRef, (snapshot) => {
-      if (snapshot.exists()) {
-        const data = snapshot.data();
-        if (data.phases) setPhases(data.phases);
-        if (data.taskStates) setTaskStates(data.taskStates);
-      } else {
-        saveToCloud(DEFAULT_PHASES, {});
-      }
-      setLoading(false);
-    }, (err) => {
-      setError("שגיאת סנכרון");
-      setLoading(false);
-    });
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            overflow: hidden;
+        }
 
-    return () => unsubscribe();
-  }, [user, view]);
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
 
-  // Admin Data Fetch
-  useEffect(() => {
-    if (view !== 'admin' || !user) return;
-    setLoading(true);
-    
-    const usersColRef = collection(db, 'artifacts', appId, 'public', 'data', 'checklistData');
-    const unsubscribe = onSnapshot(usersColRef, (snapshot) => {
-      const data = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      }));
-      setAllUsersData(data);
-      setLoading(false);
-    }, (err) => {
-      setError("אין הרשאות לצפייה בנתוני משתמשים");
-      setLoading(false);
-    });
+        .header h1 {
+            font-size: 2em;
+            margin-bottom: 10px;
+        }
 
-    return () => unsubscribe();
-  }, [view, user]);
+        .header p {
+            opacity: 0.9;
+            font-size: 1.1em;
+        }
 
-  const saveToCloud = async (updatedPhases, updatedStates) => {
-    if (!user) return;
-    try {
-      const dataDocRef = doc(db, 'artifacts', appId, 'public', 'data', 'checklistData', user.uid);
-      await setDoc(dataDocRef, {
-        phases: updatedPhases,
-        taskStates: updatedStates,
-        lastUpdated: Date.now(),
-        userId: user.uid
-      }, { merge: true });
-    } catch (err) {
-      console.error(err);
-    }
-  };
+        .login-section {
+            padding: 40px;
+            text-align: center;
+        }
 
-  const calculateProgress = (phasesArr, statesObj) => {
-    const allTasks = phasesArr.flatMap(p => p.tasks);
-    if (allTasks.length === 0) return 0;
-    const completedCount = allTasks.filter(t => statesObj[t.id]).length;
-    return Math.round((completedCount / allTasks.length) * 100);
-  };
+        .login-section h2 {
+            color: #333;
+            margin-bottom: 20px;
+        }
 
-  const toggleTask = (taskId) => {
-    if (isEditMode) return;
-    const newStates = { ...taskStates, [taskId]: !taskStates[taskId] };
-    setTaskStates(newStates);
-    saveToCloud(phases, newStates);
-  };
+        .login-section input {
+            width: 100%;
+            max-width: 400px;
+            padding: 15px;
+            font-size: 1em;
+            border: 2px solid #ddd;
+            border-radius: 10px;
+            margin-bottom: 20px;
+            text-align: center;
+            transition: border-color 0.3s;
+        }
 
-  const addTask = (phaseIdx) => {
-    if (!newTaskText.trim()) return;
-    const updatedPhases = [...phases];
-    updatedPhases[phaseIdx].tasks.push({
-      id: `custom-${Date.now()}`,
-      text: newTaskText,
-      link: ""
-    });
-    setPhases(updatedPhases);
-    setNewTaskText("");
-    setActivePhaseIndex(null);
-    saveToCloud(updatedPhases, taskStates);
-  };
+        .login-section input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
 
-  const AdminPanel = () => (
-    <div className="animate-in fade-in duration-500">
-      <div className="flex items-center justify-between mb-8">
-        <button onClick={() => setView('user')} className="flex items-center gap-2 text-teal-600 font-bold hover:bg-teal-50 px-3 py-2 rounded-xl transition-colors">
-          <ChevronRight size={20} /> חזרה לצ'ק-ליסט שלי
-        </button>
-        <h1 className="text-2xl font-black text-slate-800">ניהול משתמשים</h1>
-      </div>
+        .btn {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 15px 40px;
+            font-size: 1.1em;
+            border-radius: 10px;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
 
-      <div className="bg-white rounded-3xl shadow-sm border border-slate-200 overflow-hidden">
-        <table className="w-full text-right border-collapse">
-          <thead>
-            <tr className="bg-slate-50 border-b border-slate-200">
-              <th className="p-4 text-slate-500 font-bold text-sm">משתמש (UID)</th>
-              <th className="p-4 text-slate-500 font-bold text-sm text-center">התקדמות</th>
-              <th className="p-4 text-slate-500 font-bold text-sm">עדכון אחרון</th>
-              <th className="p-4 text-slate-500 font-bold text-sm text-center">סטטוס</th>
-            </tr>
-          </thead>
-          <tbody>
-            {allUsersData.map((u) => (
-              <tr key={u.id} className="border-b border-slate-100 hover:bg-slate-50 transition-colors">
-                <td className="p-4 font-mono text-xs text-slate-500">{u.id}</td>
-                <td className="p-4">
-                  <div className="flex items-center justify-center gap-3">
-                    <div className="w-24 bg-slate-100 h-2 rounded-full overflow-hidden">
-                      <div 
-                        className="bg-teal-500 h-full" 
-                        style={{ width: `${calculateProgress(u.phases || DEFAULT_PHASES, u.taskStates || {})}%` }}
-                      ></div>
-                    </div>
-                    <span className="font-bold text-teal-600 text-sm">
-                      {calculateProgress(u.phases || DEFAULT_PHASES, u.taskStates || {})}%
-                    </span>
-                  </div>
-                </td>
-                <td className="p-4 text-slate-600 text-xs">
-                  {u.lastUpdated ? new Date(u.lastUpdated).toLocaleString('he-IL') : '---'}
-                </td>
-                <td className="p-4 text-center">
-                  {calculateProgress(u.phases || DEFAULT_PHASES, u.taskStates || {}) === 100 ? (
-                    <span className="bg-green-100 text-green-700 px-2 py-1 rounded-md text-[10px] font-bold">הושלם</span>
-                  ) : (
-                    <span className="bg-amber-100 text-amber-700 px-2 py-1 rounded-md text-[10px] font-bold">בתהליך</span>
-                  )}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-        {allUsersData.length === 0 && (
-          <div className="p-10 text-center text-slate-400 font-medium">לא נמצאו משתמשים רשומים</div>
-        )}
-      </div>
-    </div>
-  );
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(0, 0, 0, 0.2);
+        }
 
-  if (loading) {
-    return <div className="flex h-screen items-center justify-center bg-slate-50" dir="rtl"><Loader2 className="text-teal-600 animate-spin" size={40} /></div>;
-  }
+        .btn:active {
+            transform: translateY(0);
+        }
 
-  return (
-    <div className="min-h-screen bg-slate-50 p-4 md:p-8 font-sans text-right" dir="rtl">
-      <div className="max-w-4xl mx-auto">
-        
-        {view === 'admin' ? (
-          <AdminPanel />
-        ) : (
-          <>
-            {/* Header */}
-            <div className="bg-white rounded-3xl p-6 md:p-10 shadow-sm mb-8 border border-slate-200 relative">
-              <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
-                <div className="flex items-center gap-4">
-                  <div className="bg-teal-600 p-3 rounded-2xl text-white"><ListTodo size={28} /></div>
-                  <div>
-                    <h1 className="text-2xl md:text-3xl font-black text-slate-800">הצ'ק-ליסט שלי</h1>
-                    <p className="text-slate-500 text-xs">מזהה משתמש: {user?.uid}</p>
-                  </div>
-                </div>
+        .btn-secondary {
+            background: #e0e0e0;
+            color: #333;
+            margin-right: 10px;
+        }
 
-                <div className="flex items-center gap-2 flex-wrap">
-                  <button 
-                    onClick={() => setView('admin')}
-                    className="flex items-center gap-2 px-4 py-2 bg-slate-800 text-white rounded-xl font-bold text-sm hover:bg-black transition-all"
-                  >
-                    <Users size={18} /> ניהול משתמשים
-                  </button>
-                  <button 
-                    onClick={() => setIsEditMode(!isEditMode)}
-                    className={`flex items-center gap-2 px-4 py-2 rounded-xl font-bold text-sm border transition-all ${
-                      isEditMode ? 'bg-orange-50 text-orange-600 border-orange-200' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
-                    }`}
-                  >
-                    <Settings2 size={18} /> {isEditMode ? "סיום עריכה" : "עריכת משימות"}
-                  </button>
-                </div>
-              </div>
+        .content {
+            display: none;
+            padding: 30px;
+        }
 
-              <div className="mt-8 flex items-center gap-4">
-                 <div className="flex-1 bg-slate-100 h-3 rounded-full overflow-hidden">
-                    <div className="bg-teal-500 h-full transition-all duration-700" style={{ width: `${calculateProgress(phases, taskStates)}%` }}></div>
-                 </div>
-                 <span className="font-black text-teal-600">{calculateProgress(phases, taskStates)}%</span>
-              </div>
+        .user-info {
+            background: #f5f5f5;
+            padding: 15px 20px;
+            border-radius: 10px;
+            margin-bottom: 30px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .user-info span {
+            color: #666;
+        }
+
+        .user-info strong {
+            color: #333;
+        }
+
+        .progress-bar {
+            background: #e0e0e0;
+            height: 30px;
+            border-radius: 15px;
+            overflow: hidden;
+            margin-bottom: 30px;
+            position: relative;
+        }
+
+        .progress-fill {
+            background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+            height: 100%;
+            transition: width 0.3s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: bold;
+        }
+
+        .category {
+            margin-bottom: 30px;
+        }
+
+        .category-header {
+            background: #f5f5f5;
+            padding: 15px 20px;
+            border-radius: 10px;
+            margin-bottom: 15px;
+            cursor: pointer;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            transition: background 0.2s;
+        }
+
+        .category-header:hover {
+            background: #e8e8e8;
+        }
+
+        .category-header h3 {
+            color: #333;
+            font-size: 1.3em;
+        }
+
+        .category-progress {
+            font-size: 0.9em;
+            color: #666;
+        }
+
+        .tasks {
+            padding-right: 20px;
+        }
+
+        .task {
+            background: white;
+            border: 2px solid #e0e0e0;
+            border-radius: 10px;
+            padding: 15px;
+            margin-bottom: 10px;
+            display: flex;
+            align-items: flex-start;
+            transition: all 0.2s;
+        }
+
+        .task:hover {
+            border-color: #667eea;
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.1);
+        }
+
+        .task.completed {
+            background: #f0f7ff;
+            border-color: #667eea;
+        }
+
+        .task input[type="checkbox"] {
+            width: 24px;
+            height: 24px;
+            margin-left: 15px;
+            cursor: pointer;
+            flex-shrink: 0;
+            margin-top: 2px;
+        }
+
+        .task-content {
+            flex: 1;
+        }
+
+        .task-title {
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 5px;
+            font-size: 1.05em;
+        }
+
+        .task.completed .task-title {
+            text-decoration: line-through;
+            color: #999;
+        }
+
+        .task-date {
+            color: #666;
+            font-size: 0.9em;
+            margin-bottom: 5px;
+        }
+
+        .task-description {
+            color: #666;
+            font-size: 0.95em;
+            line-height: 1.5;
+        }
+
+        .task.completed .task-description {
+            color: #aaa;
+        }
+
+        .hidden {
+            display: none;
+        }
+
+        @media (max-width: 768px) {
+            .container {
+                border-radius: 0;
+            }
+
+            .header h1 {
+                font-size: 1.5em;
+            }
+
+            .login-section {
+                padding: 30px 20px;
+            }
+
+            .content {
+                padding: 20px;
+            }
+
+            .btn {
+                padding: 12px 30px;
+                font-size: 1em;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>📋 רשימת משימות לשנת שבתון</h1>
+            <p>עקבו אחר כל השלבים החשובים בדרך לשנת שבתון מוצלחת</p>
+        </div>
+
+        <div class="login-section" id="loginSection">
+            <h2>כניסה למערכת</h2>
+            <p style="color: #666; margin-bottom: 20px;">הזינו את כתובת האימייל שלכם לסינכרון המשימות בין כל המכשירים</p>
+            <input type="email" id="emailInput" placeholder="your.email@example.com" required>
+            <br>
+            <button class="btn" onclick="login()">כניסה</button>
+        </div>
+
+        <div class="content" id="mainContent">
+            <div class="user-info">
+                <span>מחובר כ: <strong id="userEmail"></strong></span>
+                <button class="btn btn-secondary" onclick="logout()">התנתק</button>
             </div>
 
-            {/* Checklist */}
-            <div className="space-y-8">
-              {phases.map((phase, pIdx) => (
-                <div key={pIdx}>
-                  <div className="flex justify-between items-center mb-4">
-                    <h2 className="text-lg font-black text-slate-700 pr-2 border-r-4 border-teal-500 mr-2">{phase.name}</h2>
-                    {isEditMode && (
-                      <button onClick={() => setActivePhaseIndex(activePhaseIndex === pIdx ? null : pIdx)} className="p-1 bg-teal-600 text-white rounded-lg"><Plus size={16}/></button>
-                    )}
-                  </div>
-                  
-                  {isEditMode && activePhaseIndex === pIdx && (
-                    <div className="mb-4 flex gap-2">
-                      <input 
-                        type="text" value={newTaskText} onChange={(e) => setNewTaskText(e.target.value)}
-                        placeholder="משימה חדשה..." className="flex-1 p-2 rounded-lg border text-sm"
-                        onKeyPress={(e) => e.key === 'Enter' && addTask(pIdx)}
-                      />
-                      <button onClick={() => addTask(pIdx)} className="bg-teal-600 text-white px-4 rounded-lg text-sm font-bold">הוספה</button>
-                    </div>
-                  )}
+            <div class="progress-bar">
+                <div class="progress-fill" id="progressFill">0%</div>
+            </div>
 
-                  <div className="grid gap-2">
-                    {phase.tasks.map((task, tIdx) => (
-                      <div key={task.id} onClick={() => toggleTask(task.id)} className={`flex items-center justify-between p-4 rounded-2xl border transition-all ${isEditMode ? '' : 'cursor-pointer'} ${taskStates[task.id] ? 'bg-slate-50 border-slate-100 opacity-60' : 'bg-white border-slate-200 shadow-sm'}`}>
-                        <div className="flex items-center gap-3">
-                          {!isEditMode && (taskStates[task.id] ? <CheckCircle2 className="text-teal-500" size={20}/> : <Circle className="text-slate-300" size={20}/>)}
-                          <span className={`font-bold text-sm ${taskStates[task.id] ? 'line-through text-slate-400' : 'text-slate-700'}`}>{task.text}</span>
+            <div id="categoriesContainer"></div>
+        </div>
+    </div>
+
+    <script>
+        const tasks = {
+            "לקראת שנת השבתון": [
+                {
+                    id: "task-1",
+                    title: "בקשת שבתון מקרן ההשתלמות והפקת אישור זכאות",
+                    date: "החל מחודש ינואר",
+                    description: "להכנס למערכת המקוונת באתר קרן ההשתלמות, לוודא שמסומנת שנת תשפ\"ז, להגיש בקשה ליציאה לשבתון. לאחר יום-יומיים להפיק אישור זכאות למעסיק (כפתור כחול בתחתית העמוד)."
+                },
+                {
+                    id: "task-2",
+                    title: "בקשת חל\"ת לצורך שבתון מהמעסיק",
+                    date: "החל מינואר עד 31.3",
+                    description: "לדבר עם המנהל/ת, עובדי משרד החינוך - לשלוח בקשה ליציאה לשבתון במערכת פורטל עו\"ה (לצרף אישור זכאות מהקרן). עובדי בעלות - לקבל אישור מהמעסיק ולוודא דיווח במערכת מנב\"סנט."
+                },
+                {
+                    id: "task-3",
+                    title: "חתימה על טופס התחייבות ליציאה לשבתון (טופס 1)",
+                    date: "החל מסוף מרץ / תחילת אפריל - עד 31 ביולי",
+                    description: "למלא דיגיטלית את טופס ההתחייבות, פרטי חיסכון פנסיוני, פרטי חשבון בנק, ולהעביר מסמכים נוספים דרך מערכת הקרן."
+                },
+                {
+                    id: "task-4",
+                    title: "הגשת תכנית לימודים לאישור (טופס 2)",
+                    date: "בקרן ההסתדרות: עד 31 ביולי, בקרן הארגון: עד 31 באוגוסט",
+                    description: "למלא תכנית לימודים כולל נושא, היקף שעות, שם מוסד וקוד מוסד. אם אין קוד - לצרף סילבוס."
+                }
+            ],
+            "במהלך שנת השבתון": [
+                {
+                    id: "task-5",
+                    title: "בקשת החזר שכ\"ל ממשרד החינוך (חצי שבתון)",
+                    date: "1 בספטמבר - 30 בנובמבר",
+                    description: "למשתלמים בחצי שנת שבתון - להגיש בקשה להחזר שכר לימוד במשרד החינוך דרך פורטל עו\"ה."
+                },
+                {
+                    id: "task-6",
+                    title: "הצהרה על עבודה במהלך שבתון מלא",
+                    date: "בספטמבר",
+                    description: "אם עובדים תחת מעסיק שונה בשבתון מלא - למלא טופס הצהרה ולשלוח לחשב השכר בפורטל עו\"ה. לא צריך למלא: מי שבחצי שבתון או עובד שליש משרה תחת אותו מעסיק."
+                },
+                {
+                    id: "task-7",
+                    title: "הסדרת תשלום לביטוח לאומי",
+                    date: "אוקטובר - נובמבר",
+                    description: "מי שבשבתון מלא ואינו עובד - להסדיר תשלום ביטוח לאומי ומס בריאות בשנת שבתון."
+                },
+                {
+                    id: "task-8",
+                    title: "חיסכון בקרן מקוצרת (מקור/מישור)",
+                    date: "אוקטובר - נובמבר",
+                    description: "מי שבשבתון מלא ועובד שליש משרה - אפשר לחסוך בקרן המקוצרת (מקור/מישור). המעביד מפריש 7.5% והעובד 2.5%, פטור ממס."
+                },
+                {
+                    id: "task-9",
+                    title: "בקשה לשינוי תכנית לימודים",
+                    date: "קרן הסתדרות: עד 30 ביוני, קרן ארגון: עד 31 בדצמבר",
+                    description: "אם יש צורך בשינוי תכנית הלימודים - להגיש בקשה דרך מערכת הקרן."
+                },
+                {
+                    id: "task-10",
+                    title: "הגשת בקשה להחזר מס",
+                    date: "ינואר - פברואר",
+                    description: "למלא דו\"ח מקוצר להחזר מס (טופס 135) ולצרף טופס 106 שהתקבל מהמעביד."
+                },
+                {
+                    id: "task-11",
+                    title: "הודעה על חזרה לעבודה",
+                    date: "עד 31.3",
+                    description: "לשלוח הודעה על חזרה לעבודה בשנה הבאה למשרד החינוך או למעסיק."
+                }
+            ],
+            "בתום שנת השבתון": [
+                {
+                    id: "task-12",
+                    title: "הגשת קבלות לקרן ההשתלמות",
+                    date: "עד 15.8",
+                    description: "לשלוח קבלות בגין תשלום שכר לימוד לבנק הבינלאומי הראשון דרך מערכת הקרן. לבחור 'החזר שכר לימוד לזכאים'."
+                },
+                {
+                    id: "task-13",
+                    title: "הגשת אישורי סיום לימודים",
+                    date: "עד 31.8",
+                    description: "לשלוח אישורי סיום לקרן ההשתלמות (חובה והשלמה) ולמשרד החינוך (קורסים מוכרים לגמול/אופק/תואר)."
+                },
+                {
+                    id: "task-14",
+                    title: "מילוי טופס 101",
+                    date: "סוף אוגוסט - תחילת ספטמבר",
+                    description: "למלא טופס 101 אצל המעסיק (או מקוון בפורטל עו\"ה) כדי להתאים את המס לעבודה של 4 חודשים בלבד."
+                },
+                {
+                    id: "task-15",
+                    title: "הודעה לביטוח לאומי על חזרה לעבודה",
+                    date: "סוף אוגוסט",
+                    description: "אם שילמתם בהוראת קבע - להודיע לביטוח לאומי על חזרה לעבודה (חזרה למעמד שכיר). לשלוח קבלות להחזר אם עדיין לא התקבל."
+                },
+                {
+                    id: "task-16",
+                    title: "בדיקת הפרשה מחודשת לקרן ההשתלמות ולפנסיה",
+                    date: "אוקטובר",
+                    description: "לבדוק בתלוש משכורת של ספטמבר שבוצעה הפרשה לקרן ההשתלמות ולקרן הפנסיה. אם לא - לפנות מיד למעסיק."
+                },
+                {
+                    id: "task-17",
+                    title: "בדיקת הוספת שנת ותק",
+                    date: "אוקטובר - נובמבר",
+                    description: "לשלוח אישור ותק מהקרן למעסיק. לבדוק בתלוש שעודכנו שנות הותק ושנת השבתון עודכנה. לוודא שיש אישור בכתב."
+                },
+                {
+                    id: "task-18",
+                    title: "בדיקת גמולי השתלמות",
+                    date: "נובמבר",
+                    description: "לבדוק שהתקבלו אישורים לגמולי השתלמות ושנוספו נקודות גמול בתלוש המשכורת."
+                },
+                {
+                    id: "task-19",
+                    title: "בדיקת קבלת מענק יובל (לזכאים)",
+                    date: "דצמבר - ינואר",
+                    description: "לזכאים למענק יובל - לוודא שהמעסיק העביר את מענק היובל עבור שנת השבתון, לכל המאוחר במשכורת דצמבר."
+                }
+            ]
+        };
+
+        let currentUser = null;
+
+        // Load user from storage
+        async function loadUser() {
+            try {
+                const result = await window.storage.get('shabaton_user', false);
+                if (result && result.value) {
+                    currentUser = result.value;
+                    showMainContent();
+                    loadTasks();
+                }
+            } catch (error) {
+                console.log('No saved user found');
+            }
+        }
+
+        async function login() {
+            const email = document.getElementById('emailInput').value.trim();
+            if (!email || !email.includes('@')) {
+                alert('נא להזין כתובת אימייל תקינה');
+                return;
+            }
+
+            try {
+                await window.storage.set('shabaton_user', email, false);
+                currentUser = email;
+                showMainContent();
+                loadTasks();
+            } catch (error) {
+                console.error('Error saving user:', error);
+                alert('שגיאה בשמירת המשתמש');
+            }
+        }
+
+        async function logout() {
+            try {
+                await window.storage.delete('shabaton_user', false);
+                currentUser = null;
+                document.getElementById('loginSection').classList.remove('hidden');
+                document.getElementById('mainContent').classList.add('hidden');
+                document.getElementById('emailInput').value = '';
+            } catch (error) {
+                console.error('Error during logout:', error);
+            }
+        }
+
+        function showMainContent() {
+            document.getElementById('loginSection').classList.add('hidden');
+            document.getElementById('mainContent').style.display = 'block';
+            document.getElementById('userEmail').textContent = currentUser;
+            renderCategories();
+        }
+
+        function renderCategories() {
+            const container = document.getElementById('categoriesContainer');
+            container.innerHTML = '';
+
+            for (const [category, categoryTasks] of Object.entries(tasks)) {
+                const categoryDiv = document.createElement('div');
+                categoryDiv.className = 'category';
+
+                const categoryHeader = document.createElement('div');
+                categoryHeader.className = 'category-header';
+                categoryHeader.innerHTML = `
+                    <h3>${category}</h3>
+                    <span class="category-progress" id="progress-${category}">0/${categoryTasks.length}</span>
+                `;
+
+                const tasksDiv = document.createElement('div');
+                tasksDiv.className = 'tasks';
+
+                categoryTasks.forEach(task => {
+                    const taskDiv = document.createElement('div');
+                    taskDiv.className = 'task';
+                    taskDiv.id = task.id;
+
+                    taskDiv.innerHTML = `
+                        <input type="checkbox" onchange="toggleTask('${task.id}')">
+                        <div class="task-content">
+                            <div class="task-title">${task.title}</div>
+                            <div class="task-date">${task.date}</div>
+                            <div class="task-description">${task.description}</div>
                         </div>
-                        {isEditMode && <button onClick={(e) => { e.stopPropagation(); /* delete logic */ }} className="text-red-300"><Trash2 size={16}/></button>}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </>
-        )}
+                    `;
 
-        <footer className="mt-12 text-center text-slate-400 text-[10px] font-bold pb-10">מערכת בקרה מרכזית • שבתון 2026</footer>
-      </div>
-    </div>
-  );
-}
+                    tasksDiv.appendChild(taskDiv);
+                });
+
+                categoryDiv.appendChild(categoryHeader);
+                categoryDiv.appendChild(tasksDiv);
+                container.appendChild(categoryDiv);
+            }
+        }
+
+        async function loadTasks() {
+            const allTasks = Object.values(tasks).flat();
+            
+            for (const task of allTasks) {
+                try {
+                    const key = `task_${currentUser}_${task.id}`;
+                    const result = await window.storage.get(key, false);
+                    
+                    if (result && result.value === 'completed') {
+                        const taskElement = document.getElementById(task.id);
+                        if (taskElement) {
+                            taskElement.classList.add('completed');
+                            taskElement.querySelector('input[type="checkbox"]').checked = true;
+                        }
+                    }
+                } catch (error) {
+                    // Task not completed yet
+                }
+            }
+
+            updateProgress();
+        }
+
+        async function toggleTask(taskId) {
+            const taskElement = document.getElementById(taskId);
+            const checkbox = taskElement.querySelector('input[type="checkbox"]');
+            const key = `task_${currentUser}_${taskId}`;
+
+            try {
+                if (checkbox.checked) {
+                    await window.storage.set(key, 'completed', false);
+                    taskElement.classList.add('completed');
+                } else {
+                    await window.storage.delete(key, false);
+                    taskElement.classList.remove('completed');
+                }
+
+                updateProgress();
+            } catch (error) {
+                console.error('Error toggling task:', error);
+            }
+        }
+
+        function updateProgress() {
+            const allTasks = Object.values(tasks).flat();
+            let completedCount = 0;
+
+            allTasks.forEach(task => {
+                const taskElement = document.getElementById(task.id);
+                if (taskElement && taskElement.classList.contains('completed')) {
+                    completedCount++;
+                }
+            });
+
+            const percentage = Math.round((completedCount / allTasks.length) * 100);
+            const progressFill = document.getElementById('progressFill');
+            progressFill.style.width = percentage + '%';
+            progressFill.textContent = percentage + '%';
+
+            // Update category progress
+            for (const [category, categoryTasks] of Object.entries(tasks)) {
+                let categoryCompleted = 0;
+                categoryTasks.forEach(task => {
+                    const taskElement = document.getElementById(task.id);
+                    if (taskElement && taskElement.classList.contains('completed')) {
+                        categoryCompleted++;
+                    }
+                });
+
+                const progressElement = document.getElementById(`progress-${category}`);
+                if (progressElement) {
+                    progressElement.textContent = `${categoryCompleted}/${categoryTasks.length}`;
+                }
+            }
+        }
+
+        // Initialize on page load
+        window.addEventListener('load', loadUser);
+    </script>
+</body>
+</html>
