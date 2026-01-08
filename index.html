@@ -12,34 +12,31 @@ import {
   doc, 
   setDoc, 
   onSnapshot, 
-  query 
+  updateDoc
 } from 'firebase/firestore';
 import { 
   Layout, 
-  Users, 
-  Settings, 
   FileText, 
   ChevronRight, 
   ShieldCheck,
   PlusCircle,
   Clock,
-  Search,
-  Filter
+  CheckCircle,
+  XCircle
 } from 'lucide-react';
 
-// Firebase configuration from environment
+// הגדרות Firebase
 const firebaseConfig = JSON.parse(__firebase_config);
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
-const appId = typeof __app_id !== 'undefined' ? __app_id : 'sabbatur-app';
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'sabbatur-manager';
 
-// --- הגדרת אימייל מנהלת ---
-// הזיני כאן את האימייל שלך. המערכת תזהה אותך כמנהלת ברגע שתתחברי.
+// --- כאן מגדירים את המנהלת ---
 const ADMIN_EMAILS = [
-  'admin@example.com', 
-  'nitzakatz1@gmail.com' // החליפי למייל האמיתי שלך
-]; 
+  'admin@example.com',
+  'nitzakatz1@gmail.com' // <--- החליפי למייל שלך כאן!
+];
 
 export default function App() {
   const [user, setUser] = useState(null);
@@ -48,6 +45,39 @@ export default function App() {
   const [userRequests, setUserRequests] = useState([]);
   const [allRequests, setAllRequests] = useState([]);
   const [loading, setLoading] = useState(true);
+
+  // פונקציית עדכון סטטוס (כעת מוגדרת בתוך הקומפוננטה)
+  const updateStatus = async (id, userId, newStatus) => {
+    try {
+      const publicRef = doc(db, 'artifacts', appId, 'public', 'data', 'all_requests', id);
+      const userRef = doc(db, 'artifacts', appId, 'users', userId, 'requests', id);
+      
+      await updateDoc(publicRef, { status: newStatus });
+      await updateDoc(userRef, { status: newStatus });
+    } catch (err) {
+      console.error("שגיאה בעדכון סטטוס:", err);
+    }
+  };
+
+  // פונקציית הוספת בקשה
+  const addRequest = async () => {
+    if (!user) return;
+    const requestId = crypto.randomUUID();
+    const newReq = {
+      id: requestId,
+      title: "בקשת שבתון - תשפ\"ה",
+      status: "בבדיקה",
+      date: new Date().toISOString(),
+      userId: user.uid,
+      userName: user.email || 'משתמש ללא מייל'
+    };
+    try {
+      await setDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'requests', requestId), newReq);
+      await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'all_requests', requestId), newReq);
+    } catch (err) { 
+      console.error("שגיאה בהוספת בקשה:", err);
+    }
+  };
 
   useEffect(() => {
     const initAuth = async () => {
@@ -58,25 +88,24 @@ export default function App() {
           await signInAnonymously(auth);
         }
       } catch (err) {
-        console.error("Auth error:", err);
+        console.error("שגיאה בהתחברות:", err);
       }
     };
 
     initAuth();
+    
     const unsubscribe = onAuthStateChanged(auth, (u) => {
       setUser(u);
-      // בדיקה: האם האימייל של המשתמש נמצא ברשימת המנהלים
-      // הערה: בסביבת הפיתוח הזו, אם אין אימייל (אנונימי), נאפשר ניהול לצורך בדיקה
-      if (u && (ADMIN_EMAILS.includes(u.email) || !u.email)) {
-        setIsAdmin(true); 
-      } else {
-        setIsAdmin(false);
-      }
+      const isUserAdmin = u && u.email && ADMIN_EMAILS.includes(u.email);
+      // אם אין מייל בכלל (אנונימי), נאפשר לו להיות אדמין לצורכי בדיקה
+      setIsAdmin(isUserAdmin || (u && !u.email));
       setLoading(false);
     });
+    
     return () => unsubscribe();
   }, []);
 
+  // האזנה לבקשות המשתמש
   useEffect(() => {
     if (!user) return;
     const userPath = collection(db, 'artifacts', appId, 'users', user.uid, 'requests');
@@ -86,6 +115,7 @@ export default function App() {
     return () => unsubscribe();
   }, [user]);
 
+  // האזנה לכל הבקשות (למנהלת)
   useEffect(() => {
     if (!user || !isAdmin) return;
     const publicPath = collection(db, 'artifacts', appId, 'public', 'data', 'all_requests');
@@ -95,110 +125,106 @@ export default function App() {
     return () => unsubscribe();
   }, [user, isAdmin]);
 
-  const addRequest = async () => {
-    if (!user) return;
-    const newReq = {
-      title: "בקשת שבתון - תשפ\"ה",
-      status: "בדיקה",
-      date: new Date().toISOString(),
-      userId: user.uid,
-      userName: user.email || 'משתמש בדיקה'
-    };
-    try {
-      await setDoc(doc(collection(db, 'artifacts', appId, 'users', user.uid, 'requests')), newReq);
-      await setDoc(doc(collection(db, 'artifacts', appId, 'public', 'data', 'all_requests')), newReq);
-    } catch (err) { console.error(err); }
-  };
-
-  if (loading) return <div className="flex h-screen items-center justify-center bg-gray-50 text-gray-400">טוען נתונים...</div>;
+  if (loading) return (
+    <div className="flex h-screen items-center justify-center bg-slate-50 text-slate-400 font-sans" dir="rtl">
+      <div className="text-center">
+        <div className="w-12 h-12 border-4 border-indigo-600 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
+        <p className="font-bold">מתחבר למערכת...</p>
+      </div>
+    </div>
+  );
 
   return (
     <div className="min-h-screen bg-slate-50 font-sans text-right" dir="rtl">
-      {/* Navbar */}
-      <nav className="bg-white border-b px-8 py-4 flex justify-between items-center sticky top-0 z-20">
+      {/* סרגל עליון */}
+      <nav className="bg-white border-b px-8 py-4 flex justify-between items-center sticky top-0 z-20 shadow-sm">
         <div className="flex items-center gap-3">
-          <div className="bg-blue-600 p-2 rounded-xl text-white shadow-md">
+          <div className="bg-indigo-600 p-2 rounded-xl text-white shadow-md">
             <Layout size={20} />
           </div>
-          <span className="text-xl font-bold text-slate-800">ניהול שבתון</span>
+          <span className="text-xl font-bold text-slate-800 tracking-tight">פורטל שבתון</span>
         </div>
         
         <div className="flex items-center gap-6">
           {isAdmin && (
-            <div className="hidden md:flex items-center gap-2 bg-amber-50 text-amber-700 px-3 py-1.5 rounded-full border border-amber-200 text-sm font-bold animate-pulse">
-              <ShieldCheck size={16} />
-              מצב מנהלת פעיל
+            <div className="flex items-center gap-2 bg-emerald-50 text-emerald-700 px-3 py-1.5 rounded-full border border-emerald-200 text-xs font-bold">
+              <ShieldCheck size={14} />
+              מצב ניהול פעיל
             </div>
           )}
           <div className="flex flex-col items-end">
-            <span className="text-sm font-medium text-slate-900">{user?.email || 'משתמש מחובר'}</span>
-            <span className="text-xs text-slate-400">{isAdmin ? 'מנהלת מערכת' : 'עובד/ת הוראה'}</span>
+            <span className="text-sm font-bold text-slate-900 leading-none mb-1">
+              {user?.email || 'מחובר (אנונימי)'}
+            </span>
+            <span className="text-[10px] text-slate-400 uppercase tracking-widest">
+              {isAdmin ? 'ADMINISTRATOR' : 'TEACHER'}
+            </span>
           </div>
         </div>
       </nav>
 
-      <div className="max-w-5xl mx-auto p-8">
-        {/* Navigation Tabs */}
-        <div className="inline-flex p-1 bg-slate-200/50 rounded-2xl mb-10">
+      <div className="max-w-6xl mx-auto p-8">
+        {/* ניווט בין טאבים */}
+        <div className="flex gap-2 mb-8 bg-slate-200/50 p-1.5 rounded-2xl w-fit">
           <button 
             onClick={() => setView('dashboard')}
-            className={`px-6 py-2.5 rounded-xl text-sm font-bold transition-all ${view === 'dashboard' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+            className={`px-8 py-2.5 rounded-xl text-sm font-bold transition-all ${view === 'dashboard' ? 'bg-white text-indigo-600 shadow-md' : 'text-slate-500 hover:bg-slate-100'}`}
           >
-            הבקשות שלי
+            אזור אישי
           </button>
           {isAdmin && (
             <button 
               onClick={() => setView('admin')}
-              className={`px-6 py-2.5 rounded-xl text-sm font-bold transition-all ${view === 'admin' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+              className={`px-8 py-2.5 rounded-xl text-sm font-bold transition-all ${view === 'admin' ? 'bg-white text-indigo-600 shadow-md' : 'text-slate-500 hover:bg-slate-100'}`}
             >
-              לוח בקרה למנהלת
+              ניהול מערכת
             </button>
           )}
         </div>
 
         {view === 'dashboard' ? (
           <div className="space-y-6">
-            <div className="flex justify-between items-end">
+            <div className="flex flex-col md:flex-row justify-between items-center bg-white p-8 rounded-3xl border border-slate-100 shadow-sm gap-4 text-center md:text-right">
               <div>
-                <h1 className="text-3xl font-black text-slate-900 mb-2">שלום {user?.displayName || ''}</h1>
-                <p className="text-slate-500 font-medium">כאן ניתן להגיש ולעקוב אחר בקשות השבתון שלך.</p>
+                <h1 className="text-3xl font-black text-slate-900 mb-2">שלום, מה נרצה להגיש היום?</h1>
+                <p className="text-slate-500 font-medium">עקוב אחר הסטטוס של בקשות השבתון שלך בזמן אמת.</p>
               </div>
               <button 
                 onClick={addRequest}
-                className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-2xl font-bold flex items-center gap-2 shadow-lg shadow-blue-200 transition-transform active:scale-95"
+                className="bg-indigo-600 hover:bg-indigo-700 text-white px-8 py-4 rounded-2xl font-bold flex items-center gap-3 shadow-xl shadow-indigo-100 transition-all active:scale-95 whitespace-nowrap"
               >
-                <PlusCircle size={20} />
+                <PlusCircle size={22} />
                 הגשת בקשה חדשה
               </button>
             </div>
 
-            <div className="grid grid-cols-1 gap-4 mt-8">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
               {userRequests.length === 0 ? (
-                <div className="bg-white p-16 rounded-3xl border-2 border-dashed border-slate-200 text-center">
-                  <FileText className="mx-auto text-slate-200 mb-4" size={60} />
-                  <p className="text-slate-400 font-medium text-lg">אין לך בקשות פעילות כרגע</p>
+                <div className="col-span-full py-20 bg-white rounded-3xl border-2 border-dashed border-slate-200 text-center flex flex-col items-center">
+                  <div className="w-20 h-20 bg-slate-50 rounded-full flex items-center justify-center mb-4 text-slate-300">
+                    <FileText size={40} />
+                  </div>
+                  <p className="text-slate-400 font-bold text-lg">טרם הוגשו בקשות</p>
                 </div>
               ) : (
                 userRequests.map(req => (
-                  <div key={req.id} className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm flex items-center justify-between hover:shadow-md transition-shadow">
-                    <div className="flex items-center gap-5">
-                      <div className="w-14 h-14 bg-blue-50 text-blue-600 rounded-2xl flex items-center justify-center">
-                        <FileText size={28} />
+                  <div key={req.id} className="bg-white p-6 rounded-3xl border border-slate-100 shadow-sm hover:shadow-xl transition-all group">
+                    <div className="flex justify-between items-start mb-4">
+                      <div className="p-3 bg-indigo-50 text-indigo-600 rounded-2xl">
+                        <FileText size={24} />
                       </div>
-                      <div>
-                        <h3 className="font-bold text-slate-800 text-lg">{req.title}</h3>
-                        <p className="text-sm text-slate-400 flex items-center gap-1.5 mt-1">
-                          <Clock size={14} /> הוגש ב-{new Date(req.date).toLocaleDateString('he-IL')}
-                        </p>
-                      </div>
+                      <span className={`px-4 py-1.5 rounded-full text-[11px] font-black border ${
+                        req.status === 'אושר' ? 'bg-emerald-50 text-emerald-700 border-emerald-100' :
+                        req.status === 'נדחה' ? 'bg-red-50 text-red-700 border-red-100' :
+                        'bg-amber-50 text-amber-700 border-amber-100'
+                      }`}>
+                        {req.status}
+                      </span>
                     </div>
-                    <div className="flex items-center gap-6">
-                      <div className="text-left">
-                        <span className="inline-block px-4 py-1.5 rounded-full text-xs font-black bg-blue-50 text-blue-700 border border-blue-100">
-                          {req.status}
-                        </span>
-                      </div>
-                      <ChevronRight className="text-slate-300" />
+                    <h3 className="text-lg font-black text-slate-800 mb-2">{req.title}</h3>
+                    <div className="flex items-center gap-2 text-slate-400 text-sm font-medium">
+                      <Clock size={14} />
+                      <span>{new Date(req.date).toLocaleDateString('he-IL')}</span>
                     </div>
                   </div>
                 ))
@@ -206,69 +232,69 @@ export default function App() {
             </div>
           </div>
         ) : (
-          <div className="space-y-6 animate-in fade-in duration-500">
-            <div className="flex justify-between items-center">
+          <div className="space-y-6">
+            <div className="flex justify-between items-end">
               <div>
-                <h1 className="text-3xl font-black text-slate-900 mb-2">ניהול כלל הבקשות</h1>
-                <p className="text-slate-500 font-medium text-lg">מעקב ואישור בקשות שבתון של כלל המורים במערכת.</p>
-              </div>
-              <div className="flex gap-2">
-                <div className="bg-white border rounded-xl p-2 flex items-center gap-2 px-4 text-slate-400 focus-within:border-blue-500 transition-colors">
-                  <Search size={18} />
-                  <input type="text" placeholder="חיפוש מורה..." className="bg-transparent border-none outline-none text-slate-700 text-sm" />
-                </div>
+                <h1 className="text-3xl font-black text-slate-900 mb-1">ניהול בקשות שבתון</h1>
+                <p className="text-slate-500 font-medium">כאן ניתן לאשר או לדחות בקשות מורים.</p>
               </div>
             </div>
 
-            <div className="bg-white rounded-3xl border border-slate-200 shadow-xl overflow-hidden">
-              <div className="p-6 bg-slate-50 border-b flex justify-between items-center">
-                <span className="font-bold text-slate-700">סה"כ בקשות: {allRequests.length}</span>
-                <button className="flex items-center gap-2 text-sm font-bold text-slate-500 hover:text-slate-800 transition-colors">
-                  <Filter size={16} /> סינון מתקדם
-                </button>
-              </div>
-              <table className="w-full text-right border-collapse">
+            <div className="bg-white rounded-[2rem] border border-slate-100 shadow-xl overflow-x-auto">
+              <table className="w-full text-right min-w-[600px]">
                 <thead>
-                  <tr className="bg-white border-b text-slate-400 text-xs uppercase tracking-wider">
-                    <th className="p-5 font-black">מגיש/ת הבקשה</th>
-                    <th className="p-5 font-black">תיאור</th>
-                    <th className="p-5 font-black">תאריך</th>
-                    <th className="p-5 font-black">סטטוס</th>
-                    <th className="p-5 font-black text-center">ניהול</th>
+                  <tr className="bg-slate-50/80 text-slate-400 text-[11px] font-black uppercase tracking-widest border-b">
+                    <th className="p-6">שם המגיש</th>
+                    <th className="p-6">סוג</th>
+                    <th className="p-6">תאריך</th>
+                    <th className="p-6">סטטוס</th>
+                    <th className="p-6 text-center">פעולות</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-slate-100 text-slate-700">
+                <tbody className="divide-y divide-slate-50">
                   {allRequests.map(req => (
-                    <tr key={req.id} className="hover:bg-blue-50/30 transition-colors group">
-                      <td className="p-5">
+                    <tr key={req.id} className="hover:bg-slate-50/50 transition-colors">
+                      <td className="p-6">
                         <div className="flex items-center gap-3">
-                          <div className="w-10 h-10 bg-slate-100 group-hover:bg-white rounded-full flex items-center justify-center text-slate-500 font-bold border border-slate-200">
+                          <div className="w-10 h-10 rounded-full bg-slate-200 text-slate-600 flex items-center justify-center font-bold text-sm">
                             {req.userName?.charAt(0)}
                           </div>
-                          <div className="flex flex-col">
-                            <span className="font-bold text-slate-900">{req.userName}</span>
-                            <span className="text-[10px] text-slate-400">ID: {req.userId.substring(0,6)}...</span>
+                          <div>
+                            <p className="font-bold text-slate-900 leading-none">{req.userName}</p>
                           </div>
                         </div>
                       </td>
-                      <td className="p-5 font-medium">{req.title}</td>
-                      <td className="p-5 text-sm text-slate-500">{new Date(req.date).toLocaleDateString('he-IL')}</td>
-                      <td className="p-5">
-                        <span className="text-[11px] font-black px-3 py-1 rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-100">
+                      <td className="p-6 font-bold text-slate-700">{req.title}</td>
+                      <td className="p-6 text-sm text-slate-500">{new Date(req.date).toLocaleDateString('he-IL')}</td>
+                      <td className="p-6">
+                        <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-lg text-[11px] font-black ${
+                          req.status === 'אושר' ? 'text-emerald-600 bg-emerald-50' :
+                          req.status === 'נדחה' ? 'text-red-600 bg-red-50' :
+                          'text-amber-600 bg-amber-50'
+                        }`}>
                           {req.status}
                         </span>
                       </td>
-                      <td className="p-5 text-center">
-                        <button className="bg-white border border-slate-200 text-slate-700 px-4 py-1.5 rounded-xl text-sm font-bold hover:bg-slate-900 hover:text-white transition-all shadow-sm">
-                          ניהול בקשה
-                        </button>
+                      <td className="p-6">
+                        <div className="flex items-center justify-center gap-2">
+                          <button 
+                            onClick={() => updateStatus(req.id, req.userId, 'אושר')}
+                            className="p-2 text-emerald-600 hover:bg-emerald-100 rounded-xl transition-all" title="אשר">
+                            <CheckCircle size={22} />
+                          </button>
+                          <button 
+                            onClick={() => updateStatus(req.id, req.userId, 'נדחה')}
+                            className="p-2 text-red-600 hover:bg-red-100 rounded-xl transition-all" title="דחה">
+                            <XCircle size={22} />
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   ))}
                   {allRequests.length === 0 && (
                     <tr>
-                      <td colSpan="5" className="p-20 text-center text-slate-300 italic font-medium">
-                        עדיין לא הוגשו בקשות במערכת.
+                      <td colSpan="5" className="p-20 text-center text-slate-400 font-medium">
+                        אין בקשות במערכת
                       </td>
                     </tr>
                   )}
@@ -281,5 +307,3 @@ export default function App() {
     </div>
   );
 }
-
-
