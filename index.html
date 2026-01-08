@@ -420,11 +420,11 @@
         let currentUser = null;
 
         // Load user from storage
-        async function loadUser() {
+        function loadUser() {
             try {
-                const result = await window.storage.get('shabaton_user', false);
-                if (result && result.value) {
-                    currentUser = result.value;
+                const savedUser = localStorage.getItem('shabaton_user');
+                if (savedUser) {
+                    currentUser = savedUser;
                     showMainContent();
                     loadTasks();
                 }
@@ -433,7 +433,7 @@
             }
         }
 
-        async function login() {
+        function login() {
             const email = document.getElementById('emailInput').value.trim();
             if (!email || !email.includes('@')) {
                 alert('נא להזין כתובת אימייל תקינה');
@@ -441,7 +441,7 @@
             }
 
             try {
-                await window.storage.set('shabaton_user', email, false);
+                localStorage.setItem('shabaton_user', email);
                 currentUser = email;
                 showMainContent();
                 loadTasks();
@@ -451,9 +451,9 @@
             }
         }
 
-        async function logout() {
+        function logout() {
             try {
-                await window.storage.delete('shabaton_user', false);
+                localStorage.removeItem('shabaton_user');
                 currentUser = null;
                 document.getElementById('loginSection').classList.remove('hidden');
                 document.getElementById('mainContent').classList.add('hidden');
@@ -511,15 +511,15 @@
             }
         }
 
-        async function loadTasks() {
+        function loadTasks() {
             const allTasks = Object.values(tasks).flat();
             
             for (const task of allTasks) {
                 try {
                     const key = `task_${currentUser}_${task.id}`;
-                    const result = await window.storage.get(key, false);
+                    const value = localStorage.getItem(key);
                     
-                    if (result && result.value === 'completed') {
+                    if (value === 'completed') {
                         const taskElement = document.getElementById(task.id);
                         if (taskElement) {
                             taskElement.classList.add('completed');
@@ -534,17 +534,17 @@
             updateProgress();
         }
 
-        async function toggleTask(taskId) {
+        function toggleTask(taskId) {
             const taskElement = document.getElementById(taskId);
             const checkbox = taskElement.querySelector('input[type="checkbox"]');
             const key = `task_${currentUser}_${taskId}`;
 
             try {
                 if (checkbox.checked) {
-                    await window.storage.set(key, 'completed', false);
+                    localStorage.setItem(key, 'completed');
                     taskElement.classList.add('completed');
                 } else {
-                    await window.storage.delete(key, false);
+                    localStorage.removeItem(key);
                     taskElement.classList.remove('completed');
                 }
 
