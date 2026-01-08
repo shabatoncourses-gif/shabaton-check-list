@@ -1,84 +1,51 @@
 import React, { useState, useEffect } from 'react';
+import { Plus, Trash2, CheckCircle2, Circle, ListTodo, Save, RefreshCw, ExternalLink } from 'lucide-react';
 import { initializeApp } from 'firebase/app';
-import { 
-  getAuth, 
-  onAuthStateChanged, 
-  signInAnonymously, 
-  signInWithCustomToken 
-} from 'firebase/auth';
-import { 
-  getFirestore, 
-  collection, 
-  doc, 
-  setDoc, 
-  onSnapshot, 
-  updateDoc
-} from 'firebase/firestore';
-import { 
-  Layout, 
-  FileText, 
-  ChevronRight, 
-  ShieldCheck,
-  PlusCircle,
-  Clock,
-  CheckCircle,
-  XCircle
-} from 'lucide-react';
+import { getAuth, onAuthStateChanged, signInAnonymously, signInWithCustomToken } from 'firebase/auth';
+import { getFirestore, collection, doc, setDoc, onSnapshot, updateDoc, deleteDoc, getDoc } from 'firebase/firestore';
 
 // הגדרות Firebase
 const firebaseConfig = JSON.parse(__firebase_config);
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
-const appId = typeof __app_id !== 'undefined' ? __app_id : 'sabbatur-manager';
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'shabaton-shared-v3';
 
-// --- כאן מגדירים את המנהלת ---
-const ADMIN_EMAILS = [
-  'admin@example.com',
-  'nitzakatz1@gmail.com' // <--- החליפי למייל שלך כאן!
+// רשימת המשימות המקורית מהמדריך
+const INITIAL_PHASES = [
+  { 
+    name: "שלב א': ההכנות (ינואר-אוגוסט)", 
+    tasks: [
+      { id: 'a1', text: "בדיקת זכאות והפקת אישור", link: "https://www.shabaton.online/luz_shabaton#1080507921" },
+      { id: 'a2', text: "בקשת חל\"ת מהמעסיק (עד 31.3)", link: "https://www.shabaton.online/luz_shabaton#request" },
+      { id: 'a3', text: "חתימה על טופס 1 (פרטים וחשבון בנק)", link: "https://www.shabaton.online/document-submission" },
+      { id: 'a4', text: "הגשת תוכנית לימודים - טופס 2", link: "https://www.shabaton.online/study-plan-submission" }
+    ]
+  },
+  { 
+    name: "שלב ב': במהלך השבתון (ספטמבר-אפריל)", 
+    tasks: [
+      { id: 'b1', text: "החזר שכר לימוד ודיווח עבודה", link: "https://www.shabaton.online/tuition-refund" },
+      { id: 'b2', text: "הסדרת ביטוח לאומי ומס בריאות", link: "https://www.shabaton.online/national-insurance" },
+      { id: 'b3', text: "בקשת החזרי מס (טופס 135)", link: "https://www.shabaton.online/tax-refund" },
+      { id: 'b4', text: "הודעת חזרה לעבודה (עד 31.3)", link: "https://www.shabaton.online/return-to-work" }
+    ]
+  },
+  { 
+    name: "שלב ג': סיום השבתון (מאי-אוגוסט)", 
+    tasks: [
+      { id: 'c1', text: "משלוח קבלות מקוריות לבנק (עד 15.8)", link: "https://www.shabaton.online/receipt-submission" }
+    ]
+  }
 ];
 
 export default function App() {
   const [user, setUser] = useState(null);
-  const [isAdmin, setIsAdmin] = useState(false);
-  const [view, setView] = useState('dashboard');
-  const [userRequests, setUserRequests] = useState([]);
-  const [allRequests, setAllRequests] = useState([]);
+  const [taskStates, setTaskStates] = useState({});
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
 
-  // פונקציית עדכון סטטוס (כעת מוגדרת בתוך הקומפוננטה)
-  const updateStatus = async (id, userId, newStatus) => {
-    try {
-      const publicRef = doc(db, 'artifacts', appId, 'public', 'data', 'all_requests', id);
-      const userRef = doc(db, 'artifacts', appId, 'users', userId, 'requests', id);
-      
-      await updateDoc(publicRef, { status: newStatus });
-      await updateDoc(userRef, { status: newStatus });
-    } catch (err) {
-      console.error("שגיאה בעדכון סטטוס:", err);
-    }
-  };
-
-  // פונקציית הוספת בקשה
-  const addRequest = async () => {
-    if (!user) return;
-    const requestId = crypto.randomUUID();
-    const newReq = {
-      id: requestId,
-      title: "בקשת שבתון - תשפ\"ה",
-      status: "בבדיקה",
-      date: new Date().toISOString(),
-      userId: user.uid,
-      userName: user.email || 'משתמש ללא מייל'
-    };
-    try {
-      await setDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'requests', requestId), newReq);
-      await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'all_requests', requestId), newReq);
-    } catch (err) { 
-      console.error("שגיאה בהוספת בקשה:", err);
-    }
-  };
-
+  // שלב 1: אימות
   useEffect(() => {
     const initAuth = async () => {
       try {
@@ -88,221 +55,149 @@ export default function App() {
           await signInAnonymously(auth);
         }
       } catch (err) {
-        console.error("שגיאה בהתחברות:", err);
+        setError("שגיאת התחברות למערכת");
       }
     };
-
     initAuth();
-    
-    const unsubscribe = onAuthStateChanged(auth, (u) => {
-      setUser(u);
-      const isUserAdmin = u && u.email && ADMIN_EMAILS.includes(u.email);
-      // אם אין מייל בכלל (אנונימי), נאפשר לו להיות אדמין לצורכי בדיקה
-      setIsAdmin(isUserAdmin || (u && !u.email));
-      setLoading(false);
-    });
-    
+    const unsubscribe = onAuthStateChanged(auth, setUser);
     return () => unsubscribe();
   }, []);
 
-  // האזנה לבקשות המשתמש
+  // שלב 2: סנכרון נתונים
   useEffect(() => {
     if (!user) return;
-    const userPath = collection(db, 'artifacts', appId, 'users', user.uid, 'requests');
-    const unsubscribe = onSnapshot(userPath, (snapshot) => {
-      setUserRequests(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
-    }, (err) => console.error(err));
+
+    // נתיב מוגן לפי חוקי הסביבה
+    const userDocRef = doc(db, 'artifacts', appId, 'public', 'data', 'userStates', user.uid);
+    
+    const unsubscribe = onSnapshot(userDocRef, (snapshot) => {
+      if (snapshot.exists()) {
+        setTaskStates(snapshot.data().states || {});
+      }
+      setLoading(false);
+    }, (err) => {
+      console.error(err);
+      setError("שגיאת הרשאות בגישה לנתונים");
+      setLoading(false);
+    });
+
     return () => unsubscribe();
   }, [user]);
 
-  // האזנה לכל הבקשות (למנהלת)
-  useEffect(() => {
-    if (!user || !isAdmin) return;
-    const publicPath = collection(db, 'artifacts', appId, 'public', 'data', 'all_requests');
-    const unsubscribe = onSnapshot(publicPath, (snapshot) => {
-      setAllRequests(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
-    }, (err) => console.error(err));
-    return () => unsubscribe();
-  }, [user, isAdmin]);
+  const toggleTask = async (taskId) => {
+    if (!user) return;
+    const newStates = { ...taskStates, [taskId]: !taskStates[taskId] };
+    setTaskStates(newStates);
 
-  if (loading) return (
-    <div className="flex h-screen items-center justify-center bg-slate-50 text-slate-400 font-sans" dir="rtl">
-      <div className="text-center">
-        <div className="w-12 h-12 border-4 border-indigo-600 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
-        <p className="font-bold">מתחבר למערכת...</p>
+    try {
+      const userDocRef = doc(db, 'artifacts', appId, 'public', 'data', 'userStates', user.uid);
+      await setDoc(userDocRef, { states: newStates, lastUpdated: Date.now() }, { merge: true });
+    } catch (err) {
+      setError("הסנכרון נכשל");
+    }
+  };
+
+  const calculateProgress = () => {
+    const allTasks = INITIAL_PHASES.flatMap(p => p.tasks);
+    const completedCount = allTasks.filter(t => taskStates[t.id]).length;
+    return Math.round((completedCount / allTasks.length) * 100);
+  };
+
+  if (loading) {
+    return (
+      <div className="flex h-screen items-center justify-center bg-slate-50 font-sans" dir="rtl">
+        <RefreshCw className="text-teal-600 animate-spin" size={32} />
       </div>
-    </div>
-  );
+    );
+  }
 
   return (
-    <div className="min-h-screen bg-slate-50 font-sans text-right" dir="rtl">
-      {/* סרגל עליון */}
-      <nav className="bg-white border-b px-8 py-4 flex justify-between items-center sticky top-0 z-20 shadow-sm">
-        <div className="flex items-center gap-3">
-          <div className="bg-indigo-600 p-2 rounded-xl text-white shadow-md">
-            <Layout size={20} />
-          </div>
-          <span className="text-xl font-bold text-slate-800 tracking-tight">פורטל שבתון</span>
-        </div>
+    <div className="min-h-screen bg-slate-50 p-4 md:p-8 font-sans" dir="rtl">
+      <div className="max-w-2xl mx-auto">
         
-        <div className="flex items-center gap-6">
-          {isAdmin && (
-            <div className="flex items-center gap-2 bg-emerald-50 text-emerald-700 px-3 py-1.5 rounded-full border border-emerald-200 text-xs font-bold">
-              <ShieldCheck size={14} />
-              מצב ניהול פעיל
-            </div>
-          )}
-          <div className="flex flex-col items-end">
-            <span className="text-sm font-bold text-slate-900 leading-none mb-1">
-              {user?.email || 'מחובר (אנונימי)'}
-            </span>
-            <span className="text-[10px] text-slate-400 uppercase tracking-widest">
-              {isAdmin ? 'ADMINISTRATOR' : 'TEACHER'}
-            </span>
-          </div>
-        </div>
-      </nav>
-
-      <div className="max-w-6xl mx-auto p-8">
-        {/* ניווט בין טאבים */}
-        <div className="flex gap-2 mb-8 bg-slate-200/50 p-1.5 rounded-2xl w-fit">
-          <button 
-            onClick={() => setView('dashboard')}
-            className={`px-8 py-2.5 rounded-xl text-sm font-bold transition-all ${view === 'dashboard' ? 'bg-white text-indigo-600 shadow-md' : 'text-slate-500 hover:bg-slate-100'}`}
-          >
-            אזור אישי
-          </button>
-          {isAdmin && (
-            <button 
-              onClick={() => setView('admin')}
-              className={`px-8 py-2.5 rounded-xl text-sm font-bold transition-all ${view === 'admin' ? 'bg-white text-indigo-600 shadow-md' : 'text-slate-500 hover:bg-slate-100'}`}
-            >
-              ניהול מערכת
-            </button>
-          )}
-        </div>
-
-        {view === 'dashboard' ? (
-          <div className="space-y-6">
-            <div className="flex flex-col md:flex-row justify-between items-center bg-white p-8 rounded-3xl border border-slate-100 shadow-sm gap-4 text-center md:text-right">
-              <div>
-                <h1 className="text-3xl font-black text-slate-900 mb-2">שלום, מה נרצה להגיש היום?</h1>
-                <p className="text-slate-500 font-medium">עקוב אחר הסטטוס של בקשות השבתון שלך בזמן אמת.</p>
+        {/* Header & Progress */}
+        <div className="bg-white rounded-3xl p-8 shadow-sm mb-6 border border-slate-200">
+          <div className="flex justify-between items-center mb-6">
+            <div className="flex items-center gap-3">
+              <div className="bg-teal-600 p-2.5 rounded-xl text-white">
+                <ListTodo size={24} />
               </div>
-              <button 
-                onClick={addRequest}
-                className="bg-indigo-600 hover:bg-indigo-700 text-white px-8 py-4 rounded-2xl font-bold flex items-center gap-3 shadow-xl shadow-indigo-100 transition-all active:scale-95 whitespace-nowrap"
-              >
-                <PlusCircle size={22} />
-                הגשת בקשה חדשה
-              </button>
+              <h1 className="text-2xl font-black text-slate-800">הצ'ק-ליסט שלי לשבתון</h1>
             </div>
+            <div className="text-left">
+               <span className="text-xs font-bold text-slate-400 uppercase tracking-tighter block">התקדמות</span>
+               <span className="text-2xl font-black text-teal-600">{calculateProgress()}%</span>
+            </div>
+          </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-              {userRequests.length === 0 ? (
-                <div className="col-span-full py-20 bg-white rounded-3xl border-2 border-dashed border-slate-200 text-center flex flex-col items-center">
-                  <div className="w-20 h-20 bg-slate-50 rounded-full flex items-center justify-center mb-4 text-slate-300">
-                    <FileText size={40} />
-                  </div>
-                  <p className="text-slate-400 font-bold text-lg">טרם הוגשו בקשות</p>
-                </div>
-              ) : (
-                userRequests.map(req => (
-                  <div key={req.id} className="bg-white p-6 rounded-3xl border border-slate-100 shadow-sm hover:shadow-xl transition-all group">
-                    <div className="flex justify-between items-start mb-4">
-                      <div className="p-3 bg-indigo-50 text-indigo-600 rounded-2xl">
-                        <FileText size={24} />
+          <div className="w-full bg-slate-100 h-3 rounded-full overflow-hidden">
+            <div 
+              className="bg-teal-500 h-full transition-all duration-500" 
+              style={{ width: `${calculateProgress()}%` }}
+            ></div>
+          </div>
+
+          {error && (
+            <div className="mt-4 p-3 bg-red-50 text-red-600 rounded-xl text-xs font-bold border border-red-100 text-center">
+              {error}
+            </div>
+          )}
+        </div>
+
+        {/* Phases */}
+        <div className="space-y-8">
+          {INITIAL_PHASES.map((phase, pIdx) => (
+            <div key={pIdx} className="space-y-3">
+              <h2 className="text-sm font-black text-teal-700 bg-teal-50 inline-block px-3 py-1 rounded-lg uppercase">
+                {phase.name}
+              </h2>
+              <div className="grid gap-3">
+                {phase.tasks.map((task) => {
+                  const isDone = taskStates[task.id];
+                  return (
+                    <div
+                      key={task.id}
+                      className={`flex items-center justify-between p-4 rounded-2xl transition-all border cursor-pointer ${
+                        isDone 
+                          ? 'bg-slate-50 border-slate-100' 
+                          : 'bg-white border-slate-200 hover:border-teal-300 shadow-sm'
+                      }`}
+                      onClick={() => toggleTask(task.id)}
+                    >
+                      <div className="flex items-center gap-4 flex-1">
+                        {isDone ? (
+                          <div className="bg-teal-500 rounded-full p-1"><CheckCircle2 className="text-white" size={18} /></div>
+                        ) : (
+                          <Circle className="text-slate-300" size={24} />
+                        )}
+                        <div className="flex flex-col">
+                          <span className={`font-bold transition-all ${
+                            isDone ? 'text-slate-400 line-through' : 'text-slate-700'
+                          }`}>
+                            {task.text}
+                          </span>
+                          <a 
+                            href={task.link} 
+                            target="_blank" 
+                            rel="noopener noreferrer"
+                            className="text-[10px] text-teal-600 font-black hover:underline mt-1 flex items-center gap-1"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            מדריך מלא <ExternalLink size={10} />
+                          </a>
+                        </div>
                       </div>
-                      <span className={`px-4 py-1.5 rounded-full text-[11px] font-black border ${
-                        req.status === 'אושר' ? 'bg-emerald-50 text-emerald-700 border-emerald-100' :
-                        req.status === 'נדחה' ? 'bg-red-50 text-red-700 border-red-100' :
-                        'bg-amber-50 text-amber-700 border-amber-100'
-                      }`}>
-                        {req.status}
-                      </span>
                     </div>
-                    <h3 className="text-lg font-black text-slate-800 mb-2">{req.title}</h3>
-                    <div className="flex items-center gap-2 text-slate-400 text-sm font-medium">
-                      <Clock size={14} />
-                      <span>{new Date(req.date).toLocaleDateString('he-IL')}</span>
-                    </div>
-                  </div>
-                ))
-              )}
-            </div>
-          </div>
-        ) : (
-          <div className="space-y-6">
-            <div className="flex justify-between items-end">
-              <div>
-                <h1 className="text-3xl font-black text-slate-900 mb-1">ניהול בקשות שבתון</h1>
-                <p className="text-slate-500 font-medium">כאן ניתן לאשר או לדחות בקשות מורים.</p>
+                  );
+                })}
               </div>
             </div>
+          ))}
+        </div>
 
-            <div className="bg-white rounded-[2rem] border border-slate-100 shadow-xl overflow-x-auto">
-              <table className="w-full text-right min-w-[600px]">
-                <thead>
-                  <tr className="bg-slate-50/80 text-slate-400 text-[11px] font-black uppercase tracking-widest border-b">
-                    <th className="p-6">שם המגיש</th>
-                    <th className="p-6">סוג</th>
-                    <th className="p-6">תאריך</th>
-                    <th className="p-6">סטטוס</th>
-                    <th className="p-6 text-center">פעולות</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-50">
-                  {allRequests.map(req => (
-                    <tr key={req.id} className="hover:bg-slate-50/50 transition-colors">
-                      <td className="p-6">
-                        <div className="flex items-center gap-3">
-                          <div className="w-10 h-10 rounded-full bg-slate-200 text-slate-600 flex items-center justify-center font-bold text-sm">
-                            {req.userName?.charAt(0)}
-                          </div>
-                          <div>
-                            <p className="font-bold text-slate-900 leading-none">{req.userName}</p>
-                          </div>
-                        </div>
-                      </td>
-                      <td className="p-6 font-bold text-slate-700">{req.title}</td>
-                      <td className="p-6 text-sm text-slate-500">{new Date(req.date).toLocaleDateString('he-IL')}</td>
-                      <td className="p-6">
-                        <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-lg text-[11px] font-black ${
-                          req.status === 'אושר' ? 'text-emerald-600 bg-emerald-50' :
-                          req.status === 'נדחה' ? 'text-red-600 bg-red-50' :
-                          'text-amber-600 bg-amber-50'
-                        }`}>
-                          {req.status}
-                        </span>
-                      </td>
-                      <td className="p-6">
-                        <div className="flex items-center justify-center gap-2">
-                          <button 
-                            onClick={() => updateStatus(req.id, req.userId, 'אושר')}
-                            className="p-2 text-emerald-600 hover:bg-emerald-100 rounded-xl transition-all" title="אשר">
-                            <CheckCircle size={22} />
-                          </button>
-                          <button 
-                            onClick={() => updateStatus(req.id, req.userId, 'נדחה')}
-                            className="p-2 text-red-600 hover:bg-red-100 rounded-xl transition-all" title="דחה">
-                            <XCircle size={22} />
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                  {allRequests.length === 0 && (
-                    <tr>
-                      <td colSpan="5" className="p-20 text-center text-slate-400 font-medium">
-                        אין בקשות במערכת
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        )}
+        <footer className="mt-12 text-center text-slate-400 text-xs pb-8">
+          המידע מסונכרן אוטומטית למסד הנתונים
+        </footer>
       </div>
     </div>
   );
