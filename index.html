@@ -4,6 +4,11 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>רשימת משימות לשנת שבתון</title>
+    
+    <!-- Firebase SDK -->
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
+    
     <style>
         * {
             margin: 0;
@@ -240,6 +245,29 @@
             display: none;
         }
 
+        .loading {
+            text-align: center;
+            padding: 20px;
+            color: #666;
+        }
+
+        .loading::after {
+            content: '';
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid #667eea;
+            border-radius: 50%;
+            border-top-color: transparent;
+            animation: spin 1s linear infinite;
+            margin-right: 10px;
+            vertical-align: middle;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
         @media (max-width: 768px) {
             .container {
                 border-radius: 0;
@@ -273,10 +301,14 @@
 
         <div class="login-section" id="loginSection">
             <h2>כניסה למערכת</h2>
-            <p style="color: #666; margin-bottom: 20px;">הזינו את כתובת האימייל שלכם לסינכרון המשימות בין כל המכשירים</p>
+            <p style="color: #666; margin-bottom: 20px;">
+                הזינו את כתובת האימייל שלכם לזיהוי וסינכרון המשימות בין כל המכשירים<br>
+                <small style="color: #999;">לא נשלחת הודעת אימות - האימייל משמש רק למטרות זיהוי</small>
+            </p>
             <input type="email" id="emailInput" placeholder="your.email@example.com" required>
             <br>
             <button class="btn" onclick="login()">כניסה</button>
+            <div id="loginLoading" class="loading hidden">טוען נתונים...</div>
         </div>
 
         <div class="content" id="mainContent">
@@ -285,15 +317,40 @@
                 <button class="btn btn-secondary" onclick="logout()">התנתק</button>
             </div>
 
-            <div class="progress-bar">
-                <div class="progress-fill" id="progressFill">0%</div>
-            </div>
+            <div id="contentLoading" class="loading">טוען משימות...</div>
 
-            <div id="categoriesContainer"></div>
+            <div id="mainContentInner" class="hidden">
+                <div class="progress-bar">
+                    <div class="progress-fill" id="progressFill">0%</div>
+                </div>
+
+                <div id="categoriesContainer"></div>
+            </div>
         </div>
     </div>
 
     <script>
+        // ⚠️ חשוב: החליפו את הקונפיגורציה הזו בפרטי Firebase שלכם!
+        // הוראות מפורטות ב-README.md
+        const firebaseConfig = {
+            apiKey: "AIzaSyBXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
+            authDomain: "your-project.firebaseapp.com",
+            projectId: "your-project-id",
+            storageBucket: "your-project.appspot.com",
+            messagingSenderId: "123456789",
+            appId: "1:123456789:web:abcdefghijklmnop"
+        };
+
+        // Initialize Firebase
+        let db;
+        try {
+            firebase.initializeApp(firebaseConfig);
+            db = firebase.firestore();
+        } catch (error) {
+            console.error("Firebase initialization error:", error);
+            alert("שגיאה באתחול המערכת. אנא וודאו שהגדרתם את Firebase בקובץ.");
+        }
+
         const tasks = {
             "לקראת שנת השבתון": [
                 {
@@ -419,35 +476,58 @@
 
         let currentUser = null;
 
-        // Load user from storage
-        function loadUser() {
+        // Load user from Firestore
+        async function loadUser() {
             try {
-                const savedUser = localStorage.getItem('shabaton_user');
-                if (savedUser) {
-                    currentUser = savedUser;
+                // Check localStorage for cached user
+                const cachedUser = localStorage.getItem('shabaton_user');
+                if (cachedUser) {
+                    currentUser = cachedUser;
                     showMainContent();
-                    loadTasks();
+                    await loadTasks();
                 }
             } catch (error) {
-                console.log('No saved user found');
+                console.log('No saved user found:', error);
             }
         }
 
-        function login() {
+        async function login() {
             const email = document.getElementById('emailInput').value.trim();
             if (!email || !email.includes('@')) {
                 alert('נא להזין כתובת אימייל תקינה');
                 return;
             }
 
+            const loadingDiv = document.getElementById('loginLoading');
+            const loginButton = document.querySelector('.login-section .btn');
+            
             try {
+                // Show loading
+                loadingDiv.classList.remove('hidden');
+                loginButton.disabled = true;
+                
+                // Save to localStorage for quick access
                 localStorage.setItem('shabaton_user', email);
                 currentUser = email;
+                
+                // Create user document in Firestore if doesn't exist
+                const userRef = db.collection('users').doc(email);
+                const userDoc = await userRef.get();
+                
+                if (!userDoc.exists) {
+                    await userRef.set({
+                        email: email,
+                        createdAt: firebase.firestore.FieldValue.serverTimestamp()
+                    });
+                }
+                
                 showMainContent();
-                loadTasks();
+                await loadTasks();
             } catch (error) {
                 console.error('Error saving user:', error);
-                alert('שגיאה בשמירת המשתמש');
+                alert('שגיאה בשמירת המשתמש. אנא בדקו את החיבור לאינטרנט והגדרת Firebase.');
+                loadingDiv.classList.add('hidden');
+                loginButton.disabled = false;
             }
         }
 
@@ -467,6 +547,8 @@
             document.getElementById('loginSection').classList.add('hidden');
             document.getElementById('mainContent').style.display = 'block';
             document.getElementById('userEmail').textContent = currentUser;
+            document.getElementById('contentLoading').classList.remove('hidden');
+            document.getElementById('mainContentInner').classList.add('hidden');
             renderCategories();
         }
 
@@ -509,48 +591,72 @@
                 categoryDiv.appendChild(tasksDiv);
                 container.appendChild(categoryDiv);
             }
+            
+            // Hide loading and show content after rendering
+            document.getElementById('contentLoading').classList.add('hidden');
+            document.getElementById('mainContentInner').classList.remove('hidden');
         }
 
-        function loadTasks() {
+        async function loadTasks() {
             const allTasks = Object.values(tasks).flat();
             
-            for (const task of allTasks) {
-                try {
-                    const key = `task_${currentUser}_${task.id}`;
-                    const value = localStorage.getItem(key);
-                    
-                    if (value === 'completed') {
-                        const taskElement = document.getElementById(task.id);
-                        if (taskElement) {
-                            taskElement.classList.add('completed');
-                            taskElement.querySelector('input[type="checkbox"]').checked = true;
-                        }
+            try {
+                // Load tasks from Firestore
+                const tasksSnapshot = await db.collection('users')
+                    .doc(currentUser)
+                    .collection('tasks')
+                    .get();
+                
+                const completedTasks = new Set();
+                tasksSnapshot.forEach(doc => {
+                    if (doc.data().completed) {
+                        completedTasks.add(doc.id);
                     }
-                } catch (error) {
-                    // Task not completed yet
+                });
+                
+                // Update UI
+                for (const task of allTasks) {
+                    const taskElement = document.getElementById(task.id);
+                    if (taskElement && completedTasks.has(task.id)) {
+                        taskElement.classList.add('completed');
+                        taskElement.querySelector('input[type="checkbox"]').checked = true;
+                    }
                 }
+                
+                updateProgress();
+            } catch (error) {
+                console.error('Error loading tasks:', error);
+                alert('שגיאה בטעינת המשימות. אנא בדקו את החיבור לאינטרנט.');
             }
-
-            updateProgress();
         }
 
-        function toggleTask(taskId) {
+        async function toggleTask(taskId) {
             const taskElement = document.getElementById(taskId);
             const checkbox = taskElement.querySelector('input[type="checkbox"]');
-            const key = `task_${currentUser}_${taskId}`;
 
             try {
+                const taskRef = db.collection('users')
+                    .doc(currentUser)
+                    .collection('tasks')
+                    .doc(taskId);
+                
                 if (checkbox.checked) {
-                    localStorage.setItem(key, 'completed');
+                    await taskRef.set({
+                        completed: true,
+                        completedAt: firebase.firestore.FieldValue.serverTimestamp()
+                    });
                     taskElement.classList.add('completed');
                 } else {
-                    localStorage.removeItem(key);
+                    await taskRef.delete();
                     taskElement.classList.remove('completed');
                 }
 
                 updateProgress();
             } catch (error) {
                 console.error('Error toggling task:', error);
+                // Revert checkbox on error
+                checkbox.checked = !checkbox.checked;
+                alert('שגיאה בשמירת השינוי. אנא בדקו את החיבור לאינטרנט.');
             }
         }
 
