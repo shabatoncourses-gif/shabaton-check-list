@@ -1,320 +1,283 @@
-<!DOCTYPE html>
-<html lang="he" dir="rtl">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>ניהול מעקב שבתון - V6.7</title>
-    
-    <script src="https://cdn.tailwindcss.com"></script>
-    <link href="https://fonts.googleapis.com/css2?family=Heebo:wght@400;700;900&display=swap" rel="stylesheet">
+import React, { useState, useEffect } from 'react';
+import { initializeApp } from 'firebase/app';
+import { 
+  getAuth, 
+  onAuthStateChanged, 
+  signInAnonymously, 
+  signInWithCustomToken 
+} from 'firebase/auth';
+import { 
+  getFirestore, 
+  collection, 
+  doc, 
+  setDoc, 
+  onSnapshot, 
+  query 
+} from 'firebase/firestore';
+import { 
+  Layout, 
+  Users, 
+  Settings, 
+  FileText, 
+  ChevronRight, 
+  ShieldCheck,
+  PlusCircle,
+  Clock,
+  Search,
+  Filter
+} from 'lucide-react';
 
-    <style>
-        body { font-family: 'Heebo', sans-serif; background-color: #fdfbf7; color: #374151; margin: 0; }
-        .full-overlay { position: fixed; inset: 0; background: #fdfbf7; display: flex; flex-direction: column; align-items: center; justify-content: center; z-index: 1000; padding: 1rem; }
-        .admin-modal { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.85); backdrop-filter: blur(15px); z-index: 2000; align-items: center; justify-content: center; padding: 1rem; }
-        .admin-modal-content { background: white; width: 100%; max-width: 550px; border-radius: 2.5rem; padding: 2.5rem; max-height: 85vh; display: flex; flex-direction: column; box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.6); }
-        .user-row { border-bottom: 1px solid #f3f4f6; padding: 16px; display: flex; justify-content: space-between; align-items: center; }
-        .progress-bar-bg { background: #f3f4f6; height: 8px; border-radius: 4px; width: 100%; overflow: hidden; margin-top: 8px; }
-        .progress-bar-fill { background: #0d9488; height: 100%; transition: width 0.5s ease-out; }
-        .status-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-left: 6px; }
-        .online { background: #22c55e; box-shadow: 0 0 8px #22c55e; animation: pulse 2s infinite; }
-        @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.5; } 100% { opacity: 1; } }
-    </style>
-</head>
-<body class="min-h-screen flex flex-col">
+// Firebase configuration from environment
+const firebaseConfig = JSON.parse(__firebase_config);
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'sabbatur-app';
 
-    <!-- Login Overlay -->
-    <div id="auth-overlay" class="full-overlay">
-        <div class="bg-white p-8 rounded-[2.5rem] shadow-2xl border border-stone-100 w-full max-w-sm text-center">
-            <h2 class="text-3xl font-black text-stone-800 mb-2">כניסה למערכת</h2>
-            <p id="version-tag" class="text-stone-500 mb-8 font-medium italic text-sm">גרסה 6.7 - בודק חיבור...</p>
-            <div class="space-y-4">
-                <input type="text" id="user-code" placeholder="שם המורה (למשל: ניצה)" class="w-full p-4 border-2 border-stone-100 rounded-2xl text-center outline-none focus:border-teal-500 bg-stone-50 transition-all">
-                <input type="email" id="user-email" placeholder="כתובת אימייל" class="w-full p-4 border-2 border-stone-100 rounded-2xl text-center outline-none focus:border-teal-500 bg-stone-50 transition-all">
-                <button id="auth-btn" onclick="app.authenticate()" class="w-full bg-teal-600 text-white font-black py-4 rounded-2xl shadow-xl hover:bg-teal-700 transition-all text-xl mt-4">התחלת מעקב</button>
-            </div>
-            <div id="sync-status" class="mt-6 text-[11px] font-bold text-stone-400"></div>
-        </div>
-    </div>
+// --- הגדרת אימייל מנהלת ---
+// הזיני כאן את האימייל שלך. המערכת תזהה אותך כמנהלת ברגע שתתחברי.
+const ADMIN_EMAILS = [
+  'admin@example.com', 
+  'teacher.manager@gmail.com' // החליפי למייל האמיתי שלך
+]; 
 
-    <!-- Admin Panel -->
-    <div id="admin-panel" class="admin-modal">
-        <div class="admin-modal-content">
-            <div class="flex justify-between items-start mb-6">
-                <div>
-                    <h3 class="text-2xl font-black text-teal-800">מנהלת: סנכרון קבוצתי</h3>
-                    <p class="text-[10px] text-stone-400 font-bold uppercase tracking-widest">LIVE SYNC V6.7</p>
-                </div>
-                <button onclick="closeAdmin()" class="bg-stone-100 p-2 rounded-xl text-lg">✕</button>
-            </div>
-            
-            <div class="flex-grow overflow-y-auto bg-stone-50 rounded-3xl border border-stone-100 mb-6" id="email-list">
-                <div class="p-12 text-center text-stone-400 font-bold italic">מחפש משתמשים נוספים בענן...</div>
-            </div>
-            
-            <button onclick="closeAdmin()" class="w-full bg-stone-900 text-white font-bold py-4 rounded-2xl shadow-lg">חזרה למעקב שלי</button>
-        </div>
-    </div>
+export default function App() {
+  const [user, setUser] = useState(null);
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [view, setView] = useState('dashboard');
+  const [userRequests, setUserRequests] = useState([]);
+  const [allRequests, setAllRequests] = useState([]);
+  const [loading, setLoading] = useState(true);
 
-    <!-- Main Content -->
-    <div id="main-content" class="hidden">
-        <header class="bg-white border-b p-4 sticky top-0 z-30 flex justify-between items-center px-6 shadow-sm">
-            <div class="flex items-center gap-4">
-                <button id="admin-btn" onclick="openAdmin()" class="hidden w-12 h-12 bg-teal-600 text-white rounded-2xl shadow-lg flex items-center justify-center text-xl transition-transform active:scale-90">⚙️</button>
-                <div>
-                    <h1 class="font-black text-stone-800 text-xl leading-none">הצ'ק ליסט שלי</h1>
-                    <p id="user-display-name" class="text-[10px] font-bold text-teal-600 uppercase mt-1"></p>
-                </div>
-            </div>
-            <div id="total-progress-circle" class="relative w-14 h-14 flex items-center justify-center bg-teal-50 rounded-full font-black text-teal-700 border-2 border-teal-100 text-lg">0%</div>
-        </header>
-
-        <main class="p-6 max-w-xl mx-auto w-full pb-20">
-            <div id="phase-container" class="space-y-6"></div>
-        </main>
-    </div>
-
-    <script type="module">
-        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.1.0/firebase-app.js";
-        import { getFirestore, doc, setDoc, getDoc, onSnapshot, collection, serverTimestamp } from "https://www.gstatic.com/firebasejs/11.1.0/firebase-firestore.js";
-        import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.1.0/firebase-auth.js";
-
-        // Configuration
-        const appId = typeof __app_id !== 'undefined' ? __app_id : "shabaton_sync_v67";
-        const ADMIN_EMAIL = "nitza@shabaton.co.il";
-
-        const initialPhases = [
-            { 
-                name: "שלב א': הכנות", 
-                tasks: [
-                    { label: "בדיקת זכאות בקרן", url: "https://www.shabaton.online" },
-                    { label: "בקשת חל\"ת (עד 31.3)", url: "https://poh.education.gov.il" },
-                    { label: "חתימה על טופס 1", url: "https://www.shabaton.online" },
-                    { label: "הגשת תוכנית לימודים (טופס 2)", url: "https://www.shabaton.online" }
-                ], 
-                states: [false, false, false, false] 
-            },
-            { 
-                name: "שלב ב': במהלך השבתון", 
-                tasks: [
-                    { label: "החזר שכר לימוד", url: "https://poh.education.gov.il" },
-                    { label: "הסדרת ביטוח לאומי", url: "https://www.btl.gov.il" },
-                    { label: "בקשת החזרי מס", url: "https://www.gov.il/he/service/income-tax-refund" },
-                    { label: "הודעת חזרה לעבודה", url: "https://poh.education.gov.il" }
-                ], 
-                states: [false, false, false, false] 
-            }
-        ];
-
-        class SabbaticalApp {
-            constructor() {
-                this.userId = null;
-                this.email = null;
-                this.db = null;
-                this.auth = null;
-                this.isOnline = false;
-                this.isAuthReady = false;
-                this.data = JSON.parse(JSON.stringify(initialPhases));
-                
-                this.initFirebase();
-            }
-
-            async initFirebase() {
-                const statusTag = document.getElementById('version-tag');
-                const syncMsg = document.getElementById('sync-status');
-                
-                try {
-                    if (typeof __firebase_config !== 'undefined' && __firebase_config) {
-                        const config = JSON.parse(__firebase_config);
-                        const fbApp = initializeApp(config);
-                        this.db = getFirestore(fbApp);
-                        this.auth = getAuth(fbApp);
-                        
-                        // Rule 3 Pattern
-                        onAuthStateChanged(this.auth, (user) => {
-                            if (user) {
-                                this.isOnline = true;
-                                this.isAuthReady = true;
-                                statusTag.innerText = "גרסה 6.7 - סנכרון ענן פעיל";
-                                syncMsg.innerText = "✅ מחובר לשרת";
-                                syncMsg.classList.add('text-teal-600');
-                            }
-                        });
-
-                        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-                            await signInWithCustomToken(this.auth, __initial_auth_token);
-                        } else {
-                            await signInAnonymously(this.auth);
-                        }
-                    } else {
-                        throw new Error("Local mode");
-                    }
-                } catch(e) {
-                    this.isOnline = false;
-                    this.isAuthReady = true;
-                    statusTag.innerText = "גרסה 6.7 - מצב שמירה מקומית";
-                    syncMsg.innerText = "ℹ️ מצב אופליין";
-                }
-            }
-
-            async authenticate() {
-                if (!this.isAuthReady) return;
-
-                const codeInput = document.getElementById('user-code');
-                const emailInput = document.getElementById('user-email');
-                const code = codeInput.value.trim().toLowerCase();
-                const email = emailInput.value.trim().toLowerCase();
-
-                if (!code || !email.includes('@')) {
-                    alert("נא להזין שם ואימייל תקינים");
-                    return;
-                }
-
-                this.userId = code;
-                this.email = email;
-
-                if (this.isOnline && this.auth.currentUser) {
-                    try {
-                        // Strict Path Rule 1 - Public data
-                        const userRef = doc(this.db, 'artifacts', appId, 'public', 'data', 'users', this.userId);
-                        const snap = await getDoc(userRef);
-                        
-                        if (snap.exists()) {
-                            this.data = snap.data().data || initialPhases;
-                        }
-
-                        await setDoc(userRef, {
-                            email: this.email,
-                            data: this.data,
-                            updatedAt: Date.now()
-                        }, { merge: true });
-
-                        this.listenToCloud();
-                    } catch(err) {
-                        console.error("Cloud Error:", err);
-                        this.loadFromLocal();
-                    }
-                } else {
-                    this.loadFromLocal();
-                }
-
-                if (this.email === ADMIN_EMAIL && this.isOnline) {
-                    document.getElementById('admin-btn').classList.remove('hidden');
-                }
-
-                document.getElementById('auth-overlay').style.display = 'none';
-                document.getElementById('main-content').classList.remove('hidden');
-                document.getElementById('user-display-name').innerText = `מורה: ${this.userId}`;
-                this.render();
-            }
-
-            loadFromLocal() {
-                const saved = localStorage.getItem(`shabaton_${this.userId}`);
-                if (saved) this.data = JSON.parse(saved);
-            }
-
-            listenToCloud() {
-                if (!this.isOnline || !this.auth.currentUser) return;
-                const userRef = doc(this.db, 'artifacts', appId, 'public', 'data', 'users', this.userId);
-                onSnapshot(userRef, (snap) => {
-                    if (snap.exists()) {
-                        const cloudData = snap.data().data;
-                        if (JSON.stringify(cloudData) !== JSON.stringify(this.data)) {
-                            this.data = cloudData;
-                            this.render();
-                        }
-                    }
-                }, (err) => console.warn("Sync:", err));
-            }
-
-            async toggle(pIdx, tIdx) {
-                this.data[pIdx].states[tIdx] = !this.data[pIdx].states[tIdx];
-                this.render();
-                
-                if (this.isOnline && this.auth.currentUser) {
-                    try {
-                        const userRef = doc(this.db, 'artifacts', appId, 'public', 'data', 'users', this.userId);
-                        await setDoc(userRef, { data: this.data, updatedAt: Date.now() }, { merge: true });
-                    } catch(e) {
-                        localStorage.setItem(`shabaton_${this.userId}`, JSON.stringify(this.data));
-                    }
-                } else {
-                    localStorage.setItem(`shabaton_${this.userId}`, JSON.stringify(this.data));
-                }
-            }
-
-            render() {
-                const container = document.getElementById('phase-container');
-                container.innerHTML = '';
-                let total = 0, done = 0;
-
-                this.data.forEach((phase, pIdx) => {
-                    const div = document.createElement('div');
-                    div.className = "bg-white p-6 rounded-3xl shadow-sm border border-stone-100 mb-6";
-                    let pDone = 0;
-                    
-                    const tasks = phase.tasks.map((t, tIdx) => {
-                        const checked = phase.states[tIdx];
-                        total++; if(checked) { done++; pDone++; }
-                        return `
-                        <div class="flex items-center justify-between mb-4 last:mb-0">
-                            <div class="flex items-center gap-4 cursor-pointer group" onclick="app.toggle(${pIdx}, ${tIdx})">
-                                <div class="w-7 h-7 border-2 rounded-xl flex items-center justify-center transition-all ${checked ? 'bg-teal-600 border-teal-600 shadow-lg shadow-teal-100' : 'border-stone-200 group-hover:border-teal-300'}">
-                                    ${checked ? '<svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7"></path></svg>' : ''}
-                                </div>
-                                <span class="text-lg ${checked ? 'line-through text-stone-300' : 'text-stone-700 font-bold'}">${t.label}</span>
-                            </div>
-                        </div>`;
-                    }).join('');
-
-                    const perc = Math.round((pDone / phase.tasks.length) * 100);
-                    div.innerHTML = `
-                        <div class="flex justify-between items-center mb-3">
-                            <h3 class="font-black text-stone-800 text-sm">${phase.name}</h3>
-                            <span class="text-[10px] font-black text-teal-600 bg-teal-50 px-2 py-1 rounded-lg">${perc}%</span>
-                        </div>
-                        <div class="progress-bar-bg mb-6"><div class="progress-bar-fill" style="width:${perc}%"></div></div>
-                        <div class="space-y-1">${tasks}</div>
-                    `;
-                    container.appendChild(div);
-                });
-                document.getElementById('total-progress-circle').innerText = Math.round((done / total) * 100) + '%';
-            }
+  useEffect(() => {
+    const initAuth = async () => {
+      try {
+        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+          await signInWithCustomToken(auth, __initial_auth_token);
+        } else {
+          await signInAnonymously(auth);
         }
+      } catch (err) {
+        console.error("Auth error:", err);
+      }
+    };
 
-        window.app = new SabbaticalApp();
+    initAuth();
+    const unsubscribe = onAuthStateChanged(auth, (u) => {
+      setUser(u);
+      // בדיקה: האם האימייל של המשתמש נמצא ברשימת המנהלים
+      // הערה: בסביבת הפיתוח הזו, אם אין אימייל (אנונימי), נאפשר ניהול לצורך בדיקה
+      if (u && (ADMIN_EMAILS.includes(u.email) || !u.email)) {
+        setIsAdmin(true); 
+      } else {
+        setIsAdmin(false);
+      }
+      setLoading(false);
+    });
+    return () => unsubscribe();
+  }, []);
 
-        window.openAdmin = () => {
-            if (!app.isOnline || !app.auth.currentUser) return;
-            document.getElementById('admin-panel').style.display = 'flex';
-            const listEl = document.getElementById('email-list');
-            const colRef = collection(app.db, 'artifacts', appId, 'public', 'data', 'users');
-            
-            onSnapshot(colRef, (snap) => {
-                let html = '';
-                snap.forEach(doc => {
-                    const u = doc.data();
-                    const isOnline = (Date.now() - (u.updatedAt || 0)) < 300000;
-                    html += `
-                        <div class="user-row bg-white mx-4 my-2 rounded-2xl border border-stone-100 shadow-sm">
-                            <div>
-                                <div class="flex items-center gap-2">
-                                    <span class="status-dot ${isOnline ? 'online' : ''}"></span>
-                                    <span class="font-black text-stone-800">${doc.id}</span>
-                                </div>
-                                <div class="text-[10px] text-stone-400 mt-1">${u.email}</div>
-                            </div>
-                            <div class="text-right">
-                                <div class="text-[10px] font-bold text-teal-600 uppercase">מחובר</div>
-                                <div class="text-[9px] text-stone-300">V6.7</div>
-                            </div>
-                        </div>`;
-                });
-                listEl.innerHTML = html || '<div class="p-10 text-center text-stone-400">אין משתמשים כרגע</div>';
-            }, (err) => console.error("Admin Error:", err));
-        };
+  useEffect(() => {
+    if (!user) return;
+    const userPath = collection(db, 'artifacts', appId, 'users', user.uid, 'requests');
+    const unsubscribe = onSnapshot(userPath, (snapshot) => {
+      setUserRequests(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+    }, (err) => console.error(err));
+    return () => unsubscribe();
+  }, [user]);
 
-        window.closeAdmin = () => { document.getElementById('admin-panel').style.display = 'none'; };
-    </script>
-</body>
-</html>
+  useEffect(() => {
+    if (!user || !isAdmin) return;
+    const publicPath = collection(db, 'artifacts', appId, 'public', 'data', 'all_requests');
+    const unsubscribe = onSnapshot(publicPath, (snapshot) => {
+      setAllRequests(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+    }, (err) => console.error(err));
+    return () => unsubscribe();
+  }, [user, isAdmin]);
+
+  const addRequest = async () => {
+    if (!user) return;
+    const newReq = {
+      title: "בקשת שבתון - תשפ\"ה",
+      status: "בדיקה",
+      date: new Date().toISOString(),
+      userId: user.uid,
+      userName: user.email || 'משתמש בדיקה'
+    };
+    try {
+      await setDoc(doc(collection(db, 'artifacts', appId, 'users', user.uid, 'requests')), newReq);
+      await setDoc(doc(collection(db, 'artifacts', appId, 'public', 'data', 'all_requests')), newReq);
+    } catch (err) { console.error(err); }
+  };
+
+  if (loading) return <div className="flex h-screen items-center justify-center bg-gray-50 text-gray-400">טוען נתונים...</div>;
+
+  return (
+    <div className="min-h-screen bg-slate-50 font-sans text-right" dir="rtl">
+      {/* Navbar */}
+      <nav className="bg-white border-b px-8 py-4 flex justify-between items-center sticky top-0 z-20">
+        <div className="flex items-center gap-3">
+          <div className="bg-blue-600 p-2 rounded-xl text-white shadow-md">
+            <Layout size={20} />
+          </div>
+          <span className="text-xl font-bold text-slate-800">ניהול שבתון</span>
+        </div>
+        
+        <div className="flex items-center gap-6">
+          {isAdmin && (
+            <div className="hidden md:flex items-center gap-2 bg-amber-50 text-amber-700 px-3 py-1.5 rounded-full border border-amber-200 text-sm font-bold animate-pulse">
+              <ShieldCheck size={16} />
+              מצב מנהלת פעיל
+            </div>
+          )}
+          <div className="flex flex-col items-end">
+            <span className="text-sm font-medium text-slate-900">{user?.email || 'משתמש מחובר'}</span>
+            <span className="text-xs text-slate-400">{isAdmin ? 'מנהלת מערכת' : 'עובד/ת הוראה'}</span>
+          </div>
+        </div>
+      </nav>
+
+      <div className="max-w-5xl mx-auto p-8">
+        {/* Navigation Tabs */}
+        <div className="inline-flex p-1 bg-slate-200/50 rounded-2xl mb-10">
+          <button 
+            onClick={() => setView('dashboard')}
+            className={`px-6 py-2.5 rounded-xl text-sm font-bold transition-all ${view === 'dashboard' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+          >
+            הבקשות שלי
+          </button>
+          {isAdmin && (
+            <button 
+              onClick={() => setView('admin')}
+              className={`px-6 py-2.5 rounded-xl text-sm font-bold transition-all ${view === 'admin' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+            >
+              לוח בקרה למנהלת
+            </button>
+          )}
+        </div>
+
+        {view === 'dashboard' ? (
+          <div className="space-y-6">
+            <div className="flex justify-between items-end">
+              <div>
+                <h1 className="text-3xl font-black text-slate-900 mb-2">שלום {user?.displayName || ''}</h1>
+                <p className="text-slate-500 font-medium">כאן ניתן להגיש ולעקוב אחר בקשות השבתון שלך.</p>
+              </div>
+              <button 
+                onClick={addRequest}
+                className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-2xl font-bold flex items-center gap-2 shadow-lg shadow-blue-200 transition-transform active:scale-95"
+              >
+                <PlusCircle size={20} />
+                הגשת בקשה חדשה
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 gap-4 mt-8">
+              {userRequests.length === 0 ? (
+                <div className="bg-white p-16 rounded-3xl border-2 border-dashed border-slate-200 text-center">
+                  <FileText className="mx-auto text-slate-200 mb-4" size={60} />
+                  <p className="text-slate-400 font-medium text-lg">אין לך בקשות פעילות כרגע</p>
+                </div>
+              ) : (
+                userRequests.map(req => (
+                  <div key={req.id} className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm flex items-center justify-between hover:shadow-md transition-shadow">
+                    <div className="flex items-center gap-5">
+                      <div className="w-14 h-14 bg-blue-50 text-blue-600 rounded-2xl flex items-center justify-center">
+                        <FileText size={28} />
+                      </div>
+                      <div>
+                        <h3 className="font-bold text-slate-800 text-lg">{req.title}</h3>
+                        <p className="text-sm text-slate-400 flex items-center gap-1.5 mt-1">
+                          <Clock size={14} /> הוגש ב-{new Date(req.date).toLocaleDateString('he-IL')}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-6">
+                      <div className="text-left">
+                        <span className="inline-block px-4 py-1.5 rounded-full text-xs font-black bg-blue-50 text-blue-700 border border-blue-100">
+                          {req.status}
+                        </span>
+                      </div>
+                      <ChevronRight className="text-slate-300" />
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        ) : (
+          <div className="space-y-6 animate-in fade-in duration-500">
+            <div className="flex justify-between items-center">
+              <div>
+                <h1 className="text-3xl font-black text-slate-900 mb-2">ניהול כלל הבקשות</h1>
+                <p className="text-slate-500 font-medium text-lg">מעקב ואישור בקשות שבתון של כלל המורים במערכת.</p>
+              </div>
+              <div className="flex gap-2">
+                <div className="bg-white border rounded-xl p-2 flex items-center gap-2 px-4 text-slate-400 focus-within:border-blue-500 transition-colors">
+                  <Search size={18} />
+                  <input type="text" placeholder="חיפוש מורה..." className="bg-transparent border-none outline-none text-slate-700 text-sm" />
+                </div>
+              </div>
+            </div>
+
+            <div className="bg-white rounded-3xl border border-slate-200 shadow-xl overflow-hidden">
+              <div className="p-6 bg-slate-50 border-b flex justify-between items-center">
+                <span className="font-bold text-slate-700">סה"כ בקשות: {allRequests.length}</span>
+                <button className="flex items-center gap-2 text-sm font-bold text-slate-500 hover:text-slate-800 transition-colors">
+                  <Filter size={16} /> סינון מתקדם
+                </button>
+              </div>
+              <table className="w-full text-right border-collapse">
+                <thead>
+                  <tr className="bg-white border-b text-slate-400 text-xs uppercase tracking-wider">
+                    <th className="p-5 font-black">מגיש/ת הבקשה</th>
+                    <th className="p-5 font-black">תיאור</th>
+                    <th className="p-5 font-black">תאריך</th>
+                    <th className="p-5 font-black">סטטוס</th>
+                    <th className="p-5 font-black text-center">ניהול</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 text-slate-700">
+                  {allRequests.map(req => (
+                    <tr key={req.id} className="hover:bg-blue-50/30 transition-colors group">
+                      <td className="p-5">
+                        <div className="flex items-center gap-3">
+                          <div className="w-10 h-10 bg-slate-100 group-hover:bg-white rounded-full flex items-center justify-center text-slate-500 font-bold border border-slate-200">
+                            {req.userName?.charAt(0)}
+                          </div>
+                          <div className="flex flex-col">
+                            <span className="font-bold text-slate-900">{req.userName}</span>
+                            <span className="text-[10px] text-slate-400">ID: {req.userId.substring(0,6)}...</span>
+                          </div>
+                        </div>
+                      </td>
+                      <td className="p-5 font-medium">{req.title}</td>
+                      <td className="p-5 text-sm text-slate-500">{new Date(req.date).toLocaleDateString('he-IL')}</td>
+                      <td className="p-5">
+                        <span className="text-[11px] font-black px-3 py-1 rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-100">
+                          {req.status}
+                        </span>
+                      </td>
+                      <td className="p-5 text-center">
+                        <button className="bg-white border border-slate-200 text-slate-700 px-4 py-1.5 rounded-xl text-sm font-bold hover:bg-slate-900 hover:text-white transition-all shadow-sm">
+                          ניהול בקשה
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                  {allRequests.length === 0 && (
+                    <tr>
+                      <td colSpan="5" className="p-20 text-center text-slate-300 italic font-medium">
+                        עדיין לא הוגשו בקשות במערכת.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
