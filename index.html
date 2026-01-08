@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>ניהול מעקב שבתון - V6.3</title>
+    
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Heebo:wght@400;700;900&display=swap" rel="stylesheet">
+
+    <style>
+        body { font-family: 'Heebo', sans-serif; background-color: #fdfbf7; color: #374151; margin: 0; }
+        .full-overlay { position: fixed; inset: 0; background: #fdfbf7; display: flex; flex-direction: column; align-items: center; justify-content: center; z-index: 1000; padding: 1rem; }
+        .admin-modal { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.85); backdrop-filter: blur(15px); z-index: 2000; align-items: center; justify-content: center; padding: 1rem; }
+        .admin-modal-content { background: white; width: 100%; max-width: 550px; border-radius: 2.5rem; padding: 2.5rem; max-height: 85vh; display: flex; flex-direction: column; box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.6); }
+        .user-row { border-bottom: 1px solid #f3f4f6; padding: 16px; display: flex; justify-content: space-between; align-items: center; }
+        .progress-bar-bg { background: #f3f4f6; height: 8px; border-radius: 4px; width: 100%; overflow: hidden; margin-top: 8px; }
+        .progress-bar-fill { background: #0d9488; height: 100%; transition: width 0.5s ease-out; }
+        .status-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-left: 6px; }
+        .online { background: #22c55e; box-shadow: 0 0 8px #22c55e; animation: pulse 2s infinite; }
+        @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.5; } 100% { opacity: 1; } }
+    </style>
+</head>
+<body class="min-h-screen flex flex-col">
+
+    <!-- Login Overlay -->
+    <div id="auth-overlay" class="full-overlay">
+        <div class="bg-white p-8 rounded-[2.5rem] shadow-2xl border border-stone-100 w-full max-w-sm text-center">
+            <h2 class="text-3xl font-black text-stone-800 mb-2">כניסה למערכת</h2>
+            <p class="text-stone-500 mb-8 font-medium italic text-sm">גרסה 6.3 - סנכרון ענן פעיל</p>
+            <div class="space-y-4">
+                <input type="text" id="user-code" placeholder="שם המורה (למשל: ניצה)" class="w-full p-4 border-2 border-stone-100 rounded-2xl text-center outline-none focus:border-teal-500 bg-stone-50 transition-all">
+                <input type="email" id="user-email" placeholder="כתובת אימייל" class="w-full p-4 border-2 border-stone-100 rounded-2xl text-center outline-none focus:border-teal-500 bg-stone-50 transition-all">
+                <button id="auth-btn" onclick="app.authenticate()" class="w-full bg-teal-600 text-white font-black py-4 rounded-2xl shadow-xl hover:bg-teal-700 transition-all text-xl mt-4">התחלת מעקב סנכרון</button>
+            </div>
+            <div id="sync-warning" class="mt-6 text-[11px] text-red-500 font-bold hidden">
+                ⚠️ שימו לב: אתם צופים בקישור שיתוף. כדי שהאפליקציה תעבוד באמת, יש להריץ את הקוד ב-Preview או כקובץ HTML.
+            </div>
+        </div>
+    </div>
+
+    <!-- Admin Panel -->
+    <div id="admin-panel" class="admin-modal">
+        <div class="admin-modal-content">
+            <div class="flex justify-between items-start mb-6">
+                <div>
+                    <h3 class="text-2xl font-black text-teal-800">מנהלת: סנכרון קבוצתי</h3>
+                    <p class="text-[10px] text-stone-400 font-bold uppercase tracking-widest">LIVE SYNC V6.3</p>
+                </div>
+                <button onclick="closeAdmin()" class="bg-stone-100 p-2 rounded-xl text-lg">✕</button>
+            </div>
+            
+            <div class="flex-grow overflow-y-auto bg-stone-50 rounded-3xl border border-stone-100 mb-6" id="email-list">
+                <div class="p-12 text-center text-stone-400 font-bold italic">מחפש משתמשים נוספים בענן...</div>
+            </div>
+            
+            <button onclick="closeAdmin()" class="w-full bg-stone-900 text-white font-bold py-4 rounded-2xl shadow-lg">חזרה למעקב שלי</button>
+        </div>
+    </div>
+
+    <!-- Main Content -->
+    <div id="main-content" class="hidden">
+        <header class="bg-white border-b p-4 sticky top-0 z-30 flex justify-between items-center px-6 shadow-sm">
+            <div class="flex items-center gap-4">
+                <button id="admin-btn" onclick="openAdmin()" class="hidden w-12 h-12 bg-teal-600 text-white rounded-2xl shadow-lg flex items-center justify-center text-xl transition-transform active:scale-90">⚙️</button>
+                <div>
+                    <h1 class="font-black text-stone-800 text-xl leading-none">הצ'ק ליסט שלי</h1>
+                    <p id="user-display-name" class="text-[10px] font-bold text-teal-600 uppercase mt-1"></p>
+                </div>
+            </div>
+            <div id="total-progress-circle" class="relative w-14 h-14 flex items-center justify-center bg-teal-50 rounded-full font-black text-teal-700 border-2 border-teal-100 text-lg">0%</div>
+        </header>
+
+        <main class="p-6 max-w-xl mx-auto w-full pb-20">
+            <div id="phase-container" class="space-y-6"></div>
+        </main>
+    </div>
+
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.1.0/firebase-app.js";
+        import { getFirestore, doc, setDoc, getDoc, onSnapshot, collection, serverTimestamp } from "https://www.gstatic.com/firebasejs/11.1.0/firebase-firestore.js";
+        import { getAuth, signInAnonymously } from "https://www.gstatic.com/firebasejs/11.1.0/firebase-auth.js";
+
+        // Firebase Configuration
+        const firebaseConfig = JSON.parse(__firebase_config);
+        const fbApp = initializeApp(firebaseConfig);
+        const db = getFirestore(fbApp);
+        const auth = getAuth(fbApp);
+        
+        const appId = "shabaton_sync_v63_final";
+        const ADMIN_EMAIL = "nitza@shabaton.co.il";
+
+        const initialPhases = [
+            { 
+                name: "שלב א': הכנות", 
+                tasks: [
+                    { label: "בדיקת זכאות בקרן", url: "https://www.shabaton.online" },
+                    { label: "בקשת חל\"ת (עד 31.3)", url: "https://poh.education.gov.il" },
+                    { label: "חתימה על טופס 1", url: "https://www.shabaton.online" },
+                    { label: "הגשת תוכנית לימודים (טופס 2)", url: "https://www.shabaton.online" }
+                ], 
+                states: [false, false, false, false] 
+            },
+            { 
+                name: "שלב ב': במהלך השבתון", 
+                tasks: [
+                    { label: "החזר שכר לימוד", url: "https://poh.education.gov.il" },
+                    { label: "הסדרת ביטוח לאומי", url: "https://www.btl.gov.il" },
+                    { label: "בקשת החזרי מס", url: "https://www.gov.il/he/service/income-tax-refund" },
+                    { label: "הודעת חזרה לעבודה", url: "https://poh.education.gov.il" }
+                ], 
+                states: [false, false, false, false] 
+            }
+        ];
+
+        class SabbaticalApp {
+            constructor() {
+                this.userId = null;
+                this.email = null;
+                this.data = JSON.parse(JSON.stringify(initialPhases));
+                this.checkUrl();
+                this.initAuth();
+            }
+
+            checkUrl() {
+                if (window.location.href.includes('share')) {
+                    document.getElementById('sync-warning').classList.remove('hidden');
+                }
+            }
+
+            async initAuth() {
+                try {
+                    await signInAnonymously(auth);
+                } catch(e) { console.error("Auth failed:", e); }
+            }
+
+            async authenticate() {
+                const codeInput = document.getElementById('user-code');
+                const emailInput = document.getElementById('user-email');
+                
+                const code = codeInput.value.trim().toLowerCase();
+                const email = emailInput.value.trim().toLowerCase();
+
+                if (!code || !email.includes('@')) {
+                    alert("נא להזין שם ואימייל תקינים");
+                    return;
+                }
+
+                this.userId = code;
+                this.email = email;
+
+                const userRef = doc(db, 'artifacts', appId, 'public', 'data', 'users', this.userId);
+                
+                try {
+                    const snap = await getDoc(userRef);
+                    if (snap.exists()) {
+                        this.data = snap.data().data || initialPhases;
+                    }
+
+                    await setDoc(userRef, {
+                        email: this.email,
+                        data: this.data,
+                        updatedAt: Date.now(),
+                        lastSeen: serverTimestamp()
+                    }, { merge: true });
+
+                    if (this.email === ADMIN_EMAIL) {
+                        document.getElementById('admin-btn').classList.remove('hidden');
+                    }
+
+                    document.getElementById('auth-overlay').style.display = 'none';
+                    document.getElementById('main-content').classList.remove('hidden');
+                    document.getElementById('user-display-name').innerText = `מורה: ${this.userId}`;
+                    
+                    this.render();
+                    this.listenToCloud();
+                } catch(e) {
+                    alert("שגיאת חיבור לענן. ודאי שאת לא בקישור ה-Share של גוגל.");
+                }
+            }
+
+            listenToCloud() {
+                const userRef = doc(db, 'artifacts', appId, 'public', 'data', 'users', this.userId);
+                onSnapshot(userRef, (snap) => {
+                    if (snap.exists()) {
+                        const cloudData = snap.data().data;
+                        if (JSON.stringify(cloudData) !== JSON.stringify(this.data)) {
+                            this.data = cloudData;
+                            this.render();
+                        }
+                    }
+                });
+            }
+
+            async toggle(pIdx, tIdx) {
+                this.data[pIdx].states[tIdx] = !this.data[pIdx].states[tIdx];
+                this.render();
+                const userRef = doc(db, 'artifacts', appId, 'public', 'data', 'users', this.userId);
+                await setDoc(userRef, { data: this.data, updatedAt: Date.now() }, { merge: true });
+            }
+
+            render() {
+                const container = document.getElementById('phase-container');
+                container.innerHTML = '';
+                let total = 0, done = 0;
+
+                this.data.forEach((phase, pIdx) => {
+                    const div = document.createElement('div');
+                    div.className = "bg-white p-6 rounded-3xl shadow-sm border border-stone-100 mb-6";
+                    let pDone = 0;
+                    
+                    const tasks = phase.tasks.map((t, tIdx) => {
+                        const checked = phase.states[tIdx];
+                        total++; if(checked) { done++; pDone++; }
+                        return `
+                        <div class="flex items-center justify-between mb-4 last:mb-0">
+                            <div class="flex items-center gap-4 cursor-pointer group" onclick="app.toggle(${pIdx}, ${tIdx})">
+                                <div class="w-7 h-7 border-2 rounded-xl flex items-center justify-center transition-all ${checked ? 'bg-teal-600 border-teal-600 shadow-lg shadow-teal-100' : 'border-stone-200 group-hover:border-teal-300'}">
+                                    ${checked ? '<svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7"></path></svg>' : ''}
+                                </div>
+                                <span class="text-lg ${checked ? 'line-through text-stone-300' : 'text-stone-700 font-bold'}">${t.label}</span>
+                            </div>
+                        </div>`;
+                    }).join('');
+
+                    const perc = Math.round((pDone / phase.tasks.length) * 100);
+                    div.innerHTML = `
+                        <div class="flex justify-between items-center mb-3">
+                            <h3 class="font-black text-stone-800 text-sm">${phase.name}</h3>
+                            <span class="text-[10px] font-black text-teal-600 bg-teal-50 px-2 py-1 rounded-lg">${perc}%</span>
+                        </div>
+                        <div class="progress-bar-bg mb-6"><div class="progress-bar-fill" style="width:${perc}%"></div></div>
+                        <div class="space-y-1">${tasks}</div>
+                    `;
+                    container.appendChild(div);
+                });
+                document.getElementById('total-progress-circle').innerText = Math.round((done / total) * 100) + '%';
+            }
+        }
+
+        window.app = new SabbaticalApp();
+
+        window.openAdmin = () => {
+            document.getElementById('admin-panel').style.display = 'flex';
+            const listEl = document.getElementById('email-list');
+            const colRef = collection(db, 'artifacts', appId, 'public', 'data', 'users');
+            
+            onSnapshot(colRef, (snap) => {
+                let html = '';
+                snap.forEach(doc => {
+                    const u = doc.data();
+                    const isOnline = (Date.now() - (u.updatedAt || 0)) < 120000;
+                    html += `
+                        <div class="user-row bg-white mx-4 my-2 rounded-2xl border border-stone-100 shadow-sm">
+                            <div>
+                                <div class="flex items-center gap-2">
+                                    <span class="status-dot ${isOnline ? 'online' : ''}"></span>
+                                    <span class="font-black text-stone-800">${doc.id}</span>
+                                </div>
+                                <div class="text-[10px] text-stone-400 mt-1">${u.email}</div>
+                            </div>
+                            <div class="text-right">
+                                <div class="text-[10px] font-bold text-teal-600 uppercase">מחובר עכשיו</div>
+                                <div class="text-[9px] text-stone-300">V6.3</div>
+                            </div>
+                        </div>`;
+                });
+                listEl.innerHTML = html || '<div class="p-10 text-center text-stone-400">ממתין למשתמשים נוספים...</div>';
+            });
+        };
+
+        window.closeAdmin = () => { document.getElementById('admin-panel').style.display = 'none'; };
+    </script>
+</body>
+</html>
